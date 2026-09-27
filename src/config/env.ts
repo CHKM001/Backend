@@ -4,6 +4,9 @@ dotenv.config()
 
 function requireEnv(key: string): string {
   const value = process.env[key]
+  if (!value && process.env.SECRET_BACKEND === 'aws-ssm') {
+    return `__SSM_PENDING_${key}__`
+  }
   if (!value) throw new Error(`Missing required environment variable: ${key}`)
   return value
 }
@@ -65,10 +68,35 @@ function validateAllRequiredEnvVars(): void {
   ]
 
   const errors: string[] = []
+  const ssmManagedSecrets = new Set([
+    'STELLAR_AGENT_SECRET_KEY',
+    'ANTHROPIC_API_KEY',
+    'DATABASE_URL',
+    'JWT_SEED',
+    'WALLET_ENCRYPTION_KEY',
+    'TWILIO_AUTH_TOKEN',
+  ])
+
+  for (const key of [
+    'JWT_SEED',
+    'WALLET_ENCRYPTION_KEY',
+    'STELLAR_AGENT_SECRET_KEY',
+    'ANTHROPIC_API_KEY',
+    'TWILIO_AUTH_TOKEN',
+    'DATABASE_URL',
+  ]) {
+    const expiresAt = process.env[`SECRET_EXPIRY_${key}`]
+    if (expiresAt) {
+      const expiry = Date.parse(expiresAt)
+      if (!Number.isFinite(expiry) || expiry <= Date.now()) {
+        errors.push(`${key} is expired or has an invalid SECRET_EXPIRY_${key}`)
+      }
+    }
+  }
 
   // ── 1. Missing vars ──────────────────────────────────────────────────────
   for (const key of requiredVars) {
-    if (!process.env[key]) {
+    if (!process.env[key] && !(process.env.SECRET_BACKEND === 'aws-ssm' && ssmManagedSecrets.has(key))) {
       errors.push(`Missing required environment variable: ${key}`)
     }
   }
@@ -337,6 +365,10 @@ export const config = {
      * or GitHub Actions secrets — never commit the raw value.
      */
     seed: requireEnv('JWT_SEED'),
+    previousSeeds: (process.env.JWT_PREVIOUS_SEEDS || '')
+      .split(',')
+      .map((seed) => seed.trim())
+      .filter(Boolean),
     session_ttl_hours: parseInt(process.env.JWT_SESSION_TTL_HOURS || '24'),
     nonce_ttl_ms: parseInt(process.env.JWT_NONCE_TTL_MS || '300000'),
     interval_ms: parseInt(process.env.JWT_CLEANUP_INTERVAL_MS || '86400000'),
