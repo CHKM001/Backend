@@ -19,6 +19,7 @@
 - **[YIELD_COMPOSITION.md](YIELD_COMPOSITION.md)** - Yield base/incentive decomposition + effective APY (#349): haircut model, schema columns, flag-gated consumption, emissions risk modifier, yield-breakdown endpoint
 - **[WEBHOOK_SECURITY.md](WEBHOOK_SECURITY.md)** - Inbound fiat webhook HMAC validation, freshness windows, replay receipts, and failure responses
 - **[PRISMA_QUERY_PERFORMANCE.md](PRISMA_QUERY_PERFORMANCE.md)** - Hot webhook query plans, supporting indexes, and the query-index regression check
+- **[NET_WORTH.md](NET_WORTH.md)** - Read-only external Stellar links, valuation/staleness semantics, and private scope
 
 ### For DevOps/Deployment
 

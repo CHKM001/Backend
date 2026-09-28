@@ -7,6 +7,7 @@
 
 export const USER_SCOPES = [
   'portfolio:read',
+  'portfolio:write',
   'transactions:read',
   'deposit:write',
   'withdraw:write',

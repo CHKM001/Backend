@@ -279,6 +279,7 @@ model User {
   userEventSequence       UserEventSequence?
   userApiKeys             UserApiKey[]
   userWebhookEndpoints    UserWebhookEndpoint[]
+  linkedExternalWallets   LinkedExternalWallet[]
   emailIdentity           EmailIdentity?
 
   @@map("users")
@@ -843,6 +844,28 @@ model CustodialWallet {
   @@map("custodial_wallets")
 }
 
+/// Read-only public Stellar address linked by its owner for personal net-worth
+/// views. Links are self-reported and never grant signing or transaction access.
+model LinkedExternalWallet {
+  id                 String    @id @default(uuid())
+  userId             String
+  publicKey          String
+  label              String
+  verificationStatus String    @default("UNVERIFIED_SELF_REPORTED")
+  balances           Json?
+  addedAt            DateTime  @default(now())
+  lastSyncedAt       DateTime?
+  lastSyncAttemptAt  DateTime?
+  syncError          String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, publicKey])
+  @@index([userId, addedAt])
+  @@index([lastSyncAttemptAt])
+  @@map("linked_external_wallets")
+}
+
 // #339: Sponsored reserves — one row per platform-sponsored ledger entry
 model ReserveSponsorship {
   id             String    @id @default(uuid())
@@ -1356,16 +1379,17 @@ model LotDisposal {
 /// not via a DB constraint, since past goals (ACHIEVED/MISSED/CANCELLED) are
 /// kept for history.
 model SavingsGoal {
-  id             String     @id @default(uuid())
-  userId         String
-  positionId     String?
-  targetAmount   Decimal    @db.Decimal(36, 18)
-  startingAmount Decimal    @db.Decimal(36, 18)
-  targetDate     DateTime
-  riskCeiling    Int? // optional min protocol risk score (0-100), matches UserStrategyPreferences.riskCeiling
-  status         GoalStatus @default(ACTIVE)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id                      String     @id @default(uuid())
+  userId                  String
+  positionId              String?
+  targetAmount            Decimal    @db.Decimal(36, 18)
+  startingAmount          Decimal    @db.Decimal(36, 18)
+  targetDate              DateTime
+  riskCeiling             Int? // optional min protocol risk score (0-100), matches UserStrategyPreferences.riskCeiling
+  includeExternalHoldings Boolean    @default(false)
+  status                  GoalStatus @default(ACTIVE)
+  createdAt               DateTime   @default(now())
+  updatedAt               DateTime   @updatedAt
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   position Position? @relation(fields: [positionId], references: [id])
