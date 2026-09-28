@@ -1155,6 +1155,18 @@ model FiatOrder {
   @@map("fiat_orders")
 }
 
+/// Hash-only receipts for authenticated inbound fiat callbacks. The provider
+/// plus SHA-256 body hash is the replay key; raw callback contents are not kept.
+model FiatWebhookReceipt {
+  id        String   @id @default(uuid())
+  provider  String
+  nonce     String
+  createdAt DateTime @default(now())
+
+  @@unique([provider, nonce])
+  @@map("fiat_webhook_receipts")
+}
+
 /// A time-boxed, provider-pinned quote returned by the best-execution quote
 /// flow (#313). Order creation may reference a lock's id (`quoteId`) instead of
 /// re-quoting; the lock is consumed exactly once and rejected past `expiresAt`
