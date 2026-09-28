@@ -1,50 +1,109 @@
-# Idempotency-Key Contract (#375)
+# Idempotency-Key Contract (#375, #483)
 
-Client-supplied idempotency keys protect mutating REST endpoints from duplicate side effects on retry.
+Client-supplied idempotency keys protect high-risk and mutating REST API endpoints from duplicate side effects caused by network timeouts, automatic client retries, UI double-submissions, or mobile reconnection.
 
-## Header
+## Header Specification
+
+Clients initiate mutating actions with an opaque `Idempotency-Key` header:
 
 ```http
-Idempotency-Key: <opaque, client-generated, ≤255 chars>
+Idempotency-Key: <client-generated UUIDv4 or opaque token, <= 255 ASCII characters>
 ```
 
-## Behavior
+### Constraints & Validation
+- **Length:** Must not exceed 255 characters. Exceeding this limit returns `400 Bad Request` with `{ "error": "idempotency_key_too_long" }`.
+- **Character Set:** Printable ASCII strings without leading/trailing whitespace.
+- **Scope:** Idempotency records are scoped to `(userId, idempotencyKey)`. Different authenticated users may independently use identical keys without collision.
 
-| Case | Response |
-|------|----------|
-| First request (miss) | Handler runs normally; response stored |
-| Retry, same fingerprint | Original `statusCode` + body replayed; `Idempotency-Replayed: true` |
-| Same key, different body | `422 idempotency_key_reuse` |
-| Request still in flight | `409 idempotency_request_in_flight` |
-| Missing on money routes | `400 idempotency_key_required` |
+---
 
-## Fingerprint
+## State Machine & Response Behavior
 
-Hash of `(method, path, userId, canonicalized JSON body)`. Key ordering is normalized; arrays are order-sensitive.
+| Case | HTTP Status | Response Header | Body / Error Code | Description |
+|------|-------------|-----------------|-------------------|-------------|
+| **First Request (Cache Miss)** | `2xx` / `4xx` / `5xx` | None | Original handler response | Request is processed normally; result status and serialized body are persisted to Redis and `IdempotencyRecord` table. |
+| **Duplicate Submission (Replay)** | Original status code (e.g. `200`, `201`) | `Idempotency-Replayed: true` | Original response body | The request matches the exact key and payload fingerprint. The cached response is returned immediately without executing the downstream business logic or on-chain transaction. |
+| **Payload Mismatch (Key Reuse)** | `422 Unprocessable Entity` | None | `{ "error": "idempotency_key_reuse" }` | The same `Idempotency-Key` was re-submitted with a different payload body, method, or path. Reusing keys across different operations is forbidden. |
+| **Concurrent Request In-Flight** | `409 Conflict` | None | `{ "error": "idempotency_request_in_flight" }` | An earlier request with the identical key is currently executing. Clients should back off with exponential jitter before retrying. |
+| **Missing Header on Required Route** | `400 Bad Request` | None | `{ "error": "idempotency_key_required" }` | Financial money routes require `Idempotency-Key`. The request is rejected before any fund movement. |
+| **Store Outage (Fail Closed)** | `503 Service Unavailable` | None | `{ "error": "Idempotency store unavailable" }` | Returned on critical financial routes when both Redis and Postgres database stores are inaccessible. |
 
-## Storage
+---
 
-- **Primary:** Redis (`idem:<userId>:<key>`, TTL-bound)
-- **Durability:** `IdempotencyRecord` DB table for money routes (Redis miss fallback)
-- **Lock:** Redis `SET NX PX` (30s) prevents concurrent double-submit
+## Fingerprint Algorithm
 
-## Route policy
+To detect key reuse with modified parameters, the middleware computes a SHA-256 fingerprint:
 
-| Route | Header | Fail mode | TTL |
-|-------|--------|-----------|-----|
-| `POST /deposit` | Required | Fail closed | 24h |
-| `POST /withdraw` | Required | Fail closed | 24h |
-| `POST /fiat/orders` | Required | Fail closed | 24h |
-| `POST /deposit/recurring` | Required | Fail closed | 24h |
+$$\text{fingerprint} = \text{SHA256}(\text{method} \parallel \text{path} \parallel \text{userId} \parallel \text{canonicalJSON}(\text{body}))$$
 
-When Redis and DB are both unavailable on money routes → `503`. Non-money routes fail open (no dedupe).
+- **Canonical JSON:** Object keys are sorted lexicographically at all nested depths. Arrays preserve their operational order.
+- **Empty / Null Bodies:** Normalized to an empty string.
 
-## Relationship to outbox idempotency
+---
 
-The client `Idempotency-Key` sits **in front of** the outbox. A replayed request returns the original response (referencing the original outbox op). The outbox's `deriveIdempotencyKey` remains a second line of defense.
+## Protected Endpoints & Route Policy
 
-## Configuration
+| Route | Method | Idempotency Key | Fail Mode | Default TTL | Category |
+|-------|--------|-----------------|-----------|-------------|----------|
+| `/api/deposit` | `POST` | **Required** | Fail closed (`503`) | 24 hours | Financial (Deposit) |
+| `/api/withdraw` | `POST` | **Required** | Fail closed (`503`) | 24 hours | Financial (Withdrawal) |
+| `/api/fiat/orders` | `POST` | **Required** | Fail closed (`503`) | 24 hours | Financial (Fiat on/off-ramp) |
+| `/api/deposit/recurring` | `POST` | **Required** | Fail closed (`503`) | 24 hours | Financial (Recurring plan) |
+| `/api/approvals/:id/approve` | `POST` | Optional (Supported) | Fail open | 24 hours | Operational (Multi-sig/governance) |
+| `/api/approvals/:id/reject` | `POST` | Optional (Supported) | Fail open | 24 hours | Operational (Multi-sig/governance) |
+| `/api/approvals/:id/cancel` | `POST` | Optional (Supported) | Fail open | 24 hours | Operational (Multi-sig/governance) |
+| `/api/portfolio/goals` | `POST` | Optional (Supported) | Fail open | 24 hours | Operational (Savings goal creation) |
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `IDEM_MAX_BODY_BYTES` | 65536 | Max stored response body size |
+---
+
+## Two-Tier Storage Architecture
+
+1. **Fast Tier (Redis):**
+   - Key format: `idem:<userId>:<idempotencyKey>`
+   - Distributed lock via `SET ... PX 30000 NX` guarantees atomic single-execution under concurrent race conditions.
+   - Completed responses cached with TTL (default 86,400s / 24h).
+2. **Durable Tier (PostgreSQL `IdempotencyRecord`):**
+   - Backing table defined in `prisma/schema.prisma` with `@@unique([userId, idempotencyKey])`.
+   - Survives Redis eviction, flush, or restart for all financial transactions.
+   - Automatic expiration index on `expiresAt`.
+
+---
+
+## Relationship to Outbox & Ledger Idempotency
+
+The HTTP `Idempotency-Key` serves as the **outer perimeter** defense at the client boundary:
+1. **Perimeter (HTTP Idempotency):** Catches duplicate client requests before running business logic, controllers, or database locks. Replays return the original response with `Idempotency-Replayed: true`.
+2. **Outbox Core (`OutboxOp`):** Generates deterministic `idempotencyKey = "<kind>:<userId>:<businessRecordId>"` ensuring asynchronous queue workers never submit duplicate transactions to Stellar/Soroban.
+3. **Ledger Boundary (`ProcessedEvent`):** Stellar transaction hashes and event sequences are recorded in the database to prevent duplicate ingestion of on-chain events.
+
+---
+
+## Client Integration Guide & Best Practices
+
+```typescript
+import { v4 as uuidv4 } from 'uuid';
+
+async function executeDeposit(amount: number, asset: string) {
+  const idempotencyKey = uuidv4();
+
+  const response = await fetch('/api/deposit', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: JSON.stringify({ amount, assetSymbol: asset }),
+  });
+
+  if (response.status === 409) {
+    // Request is in-flight: wait and retry with the SAME key
+    await sleep(2000);
+    return retryWithSameKey(idempotencyKey);
+  }
+
+  const isReplay = response.headers.get('Idempotency-Replayed') === 'true';
+  const data = await response.json();
+  return { data, isReplay };
+}
+```
