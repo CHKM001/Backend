@@ -986,14 +986,31 @@ model AlertRule {
   snoozedUntil    DateTime?
   snoozeReason    String?
   isActive        Boolean         @default(true)
+  deletedAt       DateTime?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  @@index([userId, deletedAt])
   @@index([isActive, metric])
   @@map("alert_rules")
+}
+
+/// Append-only audit trail for user-scoped soft-delete and restore actions.
+/// Deliberately has no user foreign key so retention cannot cascade away audit.
+model UserDataAudit {
+  id           String   @id @default(uuid())
+  tenantUserId String
+  actorUserId  String
+  recordType   String
+  recordId     String
+  action       String
+  createdAt    DateTime @default(now())
+
+  @@index([tenantUserId, createdAt])
+  @@index([recordType, recordId])
+  @@map("user_data_audits")
 }
 
 model SubAccount {
