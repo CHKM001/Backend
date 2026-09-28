@@ -180,6 +180,14 @@ enum SubAccountStatus {
   REVOKED
 }
 
+enum ErasureRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+  FAILED
+}
+
 model User {
   id                String   @id @default(uuid())
   walletAddress     String   @unique
@@ -220,6 +228,7 @@ model User {
   allocationSuggestions   AllocationSuggestion[]
   portfolioAttributions   PortfolioAttribution[]
   portfolioRiskAggregates PortfolioRiskAggregate[]
+  erasureRequests         ErasureRequest[]
 
   @@map("users")
 }
@@ -807,17 +816,26 @@ model ReferralCode {
 /// owed and retriable; it is never un-activated once ACTIVATED (on-chain
 /// finality). `referredUserId` is unique — one referral credit per user, ever.
 model ReferralConversion {
-  id                 String         @id @default(uuid())
-  referralCodeId     String
-  referredUserId     String         @unique
-  activatedAt        DateTime?
-  activationTxId     String? // the confirmed deposit Transaction that satisfied activation
-  status             ReferralStatus @default(PENDING)
-  ownerRewardTxId    String? // REFERRAL_REWARD Transaction paid to the referrer
-  referredRewardTxId String? // REFERRAL_REWARD Transaction paid to the referred user
-  payoutError        String? // last payout failure reason — kept for retriable visibility
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  id                     String         @id @default(uuid())
+  referralCodeId         String
+  referredUserId         String         @unique
+  activatedAt            DateTime?
+  activationTxId         String? // the confirmed deposit Transaction that satisfied activation
+  status                 ReferralStatus @default(PENDING)
+  ownerRewardTxId        String? // REFERRAL_REWARD Transaction paid to the referrer
+  referredRewardTxId     String? // REFERRAL_REWARD Transaction paid to the referred user
+  payoutError            String? // last payout failure reason — kept for retriable visibility
+  // Fraud detection fields (#490)
+  fraudCheckScore        Int?
+  fraudCheckFlags        String[]       @default([])
+  fraudCheckDetails      Json?
+  manualReviewRequired   Boolean        @default(false)
+  manualReviewRejected   Boolean        @default(false)
+  reviewedBy             String?
+  reviewedAt             DateTime?
+  rejectionReason        String?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
 
   referralCode ReferralCode @relation(fields: [referralCodeId], references: [id], onDelete: Cascade)
   referredUser User         @relation(fields: [referredUserId], references: [id], onDelete: Cascade)
@@ -825,6 +843,7 @@ model ReferralConversion {
   @@index([referralCodeId])
   @@index([status])
   @@index([createdAt])
+  @@index([manualReviewRequired])
   @@map("referral_conversions")
 }
 
@@ -1176,4 +1195,30 @@ model PortfolioRiskAggregate {
   @@index([sortinoRatio])
   @@index([annualisedVolatility])
   @@map("portfolio_risk_aggregates")
+}
+
+/// Privacy erasure request model (#489). Tracks user data deletion requests
+/// through approval workflow. Preserved even after user deletion via cascade.
+model ErasureRequest {
+  id               String                @id @default(uuid())
+  userId           String
+  requestedAt      DateTime              @default(now())
+  requestedBy      String
+  reason           String
+  status           ErasureRequestStatus  @default(PENDING)
+  approvedBy       String?
+  approvedAt       DateTime?
+  rejectedBy       String?
+  rejectedAt       DateTime?
+  rejectionReason  String?
+  completedAt      DateTime?
+  errorMessage     String?
+  updatedAt        DateTime              @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([requestedAt])
+  @@map("erasure_requests")
 }
