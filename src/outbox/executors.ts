@@ -21,7 +21,14 @@ import { getWalletByUserId } from '../stellar/wallet'
 import { getAgentKeypair } from '../stellar/client'
 import { TransactionResult } from '../stellar/types'
 import { OutboxPayload } from './types'
-import { Keypair, Asset, rpc } from '@stellar/stellar-sdk'
+import {
+  Keypair,
+  Asset,
+  rpc,
+  TransactionBuilder,
+  Operation,
+  BASE_FEE,
+} from '@stellar/stellar-sdk'
 import {
   buildSponsoredCreateAccount,
   buildSponsoredTrustline,
@@ -33,6 +40,8 @@ import {
   waitForConfirmation,
   prepareTransaction,
   simulateTransaction,
+  getAccount,
+  getNetworkPassphrase,
 } from '../stellar/client'
 import db from '../db'
 
@@ -61,6 +70,18 @@ export async function resolveSignerPublicKey(
     case 'sponsor_trustline':
     case 'revoke_sponsorship':
       return (payload as any).sponsorAccount as string
+    case 'treasury_sweep': {
+      const account = await db.treasuryAccount.findFirst({
+        where: { tier: payload.fromTier as any, isActive: true },
+        select: { publicKey: true },
+      })
+      if (!account) {
+        throw new Error(
+          `No active treasury account found for tier ${payload.fromTier}`
+        )
+      }
+      return account.publicKey
+    }
   }
 }
 
@@ -202,5 +223,63 @@ export async function executeOutboxPayload(
         .catch(() => {})
       return result
     }
+    case 'treasury_sweep':
+      return submitTreasurySweepPayment(payload)
   }
+}
+
+/**
+ * Moves funds from one treasury tier's account to another via a plain
+ * Stellar payment. Signing here uses the fromTier account's own keypair
+ * resolved through the sponsor-key env convention (STELLAR_SPONSOR_KEYS) —
+ * the same lookup-by-public-key pattern getSponsorKeypair already uses.
+ * Full multisig-threshold co-signing for treasury accounts is handled
+ * upstream by src/stellar/multisig.ts / src/jobs/treasurySweep.ts's approval
+ * gate before an op ever reaches the outbox; this executor's job is only to
+ * submit an already-authorized sweep.
+ */
+async function submitTreasurySweepPayment(payload: {
+  fromTier: string
+  toTier: string
+  asset: string
+  amount: number
+  sweepId: string
+}): Promise<TransactionResult> {
+  const [fromAccount, toAccount] = await Promise.all([
+    db.treasuryAccount.findFirst({
+      where: { tier: payload.fromTier as any, isActive: true },
+    }),
+    db.treasuryAccount.findFirst({
+      where: { tier: payload.toTier as any, isActive: true },
+    }),
+  ])
+  if (!fromAccount || !toAccount) {
+    throw new Error(
+      `Missing active treasury account for tier ${!fromAccount ? payload.fromTier : payload.toTier}`
+    )
+  }
+
+  const signer = getSponsorKeypair(fromAccount.publicKey)
+  const source = await getAccount(fromAccount.publicKey)
+  const asset =
+    payload.asset === 'XLM' ? Asset.native() : new Asset(payload.asset, '')
+
+  const tx = new TransactionBuilder(source, {
+    fee: BASE_FEE,
+    networkPassphrase: getNetworkPassphrase(),
+  })
+    .addOperation(
+      Operation.payment({
+        destination: toAccount.publicKey,
+        asset,
+        amount: payload.amount.toFixed(7),
+      })
+    )
+    .setTimeout(30)
+    .build()
+
+  tx.sign(signer)
+  const hash = await submitTransaction(tx)
+  const result = await waitForConfirmation(hash)
+  return result
 }

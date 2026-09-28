@@ -606,6 +606,11 @@ export const config = {
   },
   protocolRisk: {
     intervalMs: parseInt(process.env.PROTOCOL_RISK_INTERVAL_MS || '21600000'),
+    // #529 — when true, a ProtocolRiskMetadataEntry past nextReviewDueAt is
+    // auto-downgraded to dataConfidence: UNVERIFIED. Default off (flag-only):
+    // stale entries are surfaced but not silently altered.
+    staleAutoDowngrade:
+      process.env.PROTOCOL_RISK_STALE_AUTO_DOWNGRADE === 'true',
   },
   portfolioRisk: {
     intervalMs: parseInt(process.env.PORTFOLIO_RISK_INTERVAL_MS || '21600000'),

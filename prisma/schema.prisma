@@ -547,11 +547,11 @@ model ProtocolRate {
 
   // #349: yield composition — base (market) rate vs incentive (token-reward)
   // rate, plus the reward-token metadata the adapter returned.
-  baseApy       Decimal? @db.Decimal(10, 6)
-  incentiveApy  Decimal? @db.Decimal(10, 6)
-  rewardTokens  Json?
+  baseApy      Decimal? @db.Decimal(10, 6)
+  incentiveApy Decimal? @db.Decimal(10, 6)
+  rewardTokens Json?
 
-  fetchedAt    DateTime @default(now())
+  fetchedAt DateTime @default(now())
 
   @@unique([protocolName, assetSymbol, network, fetchedAt])
   @@index([protocolName, assetSymbol])
@@ -594,6 +594,54 @@ model ProtocolRiskScore {
   @@map("protocol_risk_scores")
 }
 
+enum DataConfidence {
+  VERIFIED
+  SELF_REPORTED
+  UNVERIFIED
+}
+
+/// Sourced, reviewable protocol risk metadata (#529) — supersedes the
+/// hand-curated static PROTOCOL_RISK_METADATA table in
+/// src/config/protocolRiskMetadata.ts (see docs/PROTOCOL_RISK_SCORING.md for
+/// the supersession note). auditReference is now required; sourceUrl is
+/// required for any upgrade to VERIFIED confidence.
+model ProtocolRiskMetadataEntry {
+  id              String         @id @default(uuid())
+  protocolName    String         @unique
+  auditStatus     AuditStatus
+  auditReference  String
+  sourceUrl       String?
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  nextReviewDueAt DateTime
+  dataConfidence  DataConfidence @default(UNVERIFIED)
+  inceptionDate   DateTime
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  history ProtocolRiskMetadataHistory[]
+
+  @@index([nextReviewDueAt])
+  @@map("protocol_risk_metadata_entries")
+}
+
+/// Append-only audit trail for ProtocolRiskMetadataEntry changes — a
+/// disputed status change is always inspectable, not just the current state.
+model ProtocolRiskMetadataHistory {
+  id             String         @id @default(uuid())
+  entryId        String
+  auditStatus    AuditStatus
+  dataConfidence DataConfidence
+  sourceUrl      String?
+  changedBy      String
+  changedAt      DateTime       @default(now())
+
+  entry ProtocolRiskMetadataEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([entryId])
+  @@map("protocol_risk_metadata_history")
+}
+
 model AgentLog {
   id             String      @id @default(uuid())
   userId         String? // null for system-level actions (scans, alerts)
@@ -634,7 +682,7 @@ model AgentLog {
 // the `heldSince` / `lastEvaluatedAt` window (see
 // src/agent/rebalanceDecision.ts); a change in inputs starts a new row.
 model RebalanceDecision {
-  id                 String   @id @default(uuid())
+  id                 String    @id @default(uuid())
   correlationId      String
   // protocol:strategy:followId from src/agent/loop.ts
   batchKey           String
@@ -643,18 +691,18 @@ model RebalanceDecision {
   outcome            String // REBALANCED | HELD | BLOCKED
   blockedReason      String? // risk_ceiling | below_min_improvement | cost_exceeds_gain | no_candidates | exposure_unplaceable
   strategyName       String?
-  strategyIsFollowed Boolean  @default(false)
+  strategyIsFollowed Boolean   @default(false)
   followedStrategyId String?
   thresholds         Json // { minimumImprovement, maxGasPercent } in effect
-  currentApy         Decimal? @db.Decimal(12, 6)
-  chosenApy          Decimal? @db.Decimal(12, 6)
-  rawImprovement     Decimal? @db.Decimal(12, 6)
-  estCostPercent     Decimal? @db.Decimal(12, 6)
-  netImprovement     Decimal? @db.Decimal(12, 6)
+  currentApy         Decimal?  @db.Decimal(12, 6)
+  chosenApy          Decimal?  @db.Decimal(12, 6)
+  rawImprovement     Decimal?  @db.Decimal(12, 6)
+  estCostPercent     Decimal?  @db.Decimal(12, 6)
+  netImprovement     Decimal?  @db.Decimal(12, 6)
   candidates         Json // ranked: [{ protocol, apy, riskScore, eligible, rejectionReason }]
   // Server-side templated rationale from structured inputs — never free-form
   // user text (see docs/AGENT_DECISIONS.md).
-  rationale          String? @db.Text
+  rationale          String?   @db.Text
   affectedUserIds    String[]
   affectedPositions  Int
   outboxOpId         String?
@@ -663,7 +711,7 @@ model RebalanceDecision {
   // REBALANCED/BLOCKED rows.
   heldSince          DateTime?
   lastEvaluatedAt    DateTime?
-  createdAt          DateTime @default(now())
+  createdAt          DateTime  @default(now())
 
   @@index([correlationId])
   @@index([fromProtocol, createdAt])
@@ -797,14 +845,14 @@ model CustodialWallet {
 
 // #339: Sponsored reserves — one row per platform-sponsored ledger entry
 model ReserveSponsorship {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   sponsoredId    String // CustodialWallet.id
   sponsorAccount String // sponsor public key
   entryType      String // ACCOUNT | TRUSTLINE | OFFER
   ledgerKey      String // sponsored ledger entry key for revoke
-  xlmReserved    Decimal  @db.Decimal(36, 18)
+  xlmReserved    Decimal   @db.Decimal(36, 18)
   status         String // ACTIVE | REVOKED | RECLAIMED
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
   revokedAt      DateTime?
 
   @@index([sponsoredId])
@@ -949,15 +997,15 @@ model AlertRule {
 }
 
 model SubAccount {
-  id           String                 @id @default(uuid())
-  parentUserId String
-  childUserId  String
-  permissions  SubAccountPermission[]
-  status       SubAccountStatus       @default(ACTIVE)
-  createdAt    DateTime               @default(now())
-  revokedAt    DateTime?
-  dailyLimit   Decimal?               @db.Decimal(36, 18)
-  transactionLimit Decimal?           @db.Decimal(36, 18)
+  id               String                 @id @default(uuid())
+  parentUserId     String
+  childUserId      String
+  permissions      SubAccountPermission[]
+  status           SubAccountStatus       @default(ACTIVE)
+  createdAt        DateTime               @default(now())
+  revokedAt        DateTime?
+  dailyLimit       Decimal?               @db.Decimal(36, 18)
+  transactionLimit Decimal?               @db.Decimal(36, 18)
 
   parent User @relation("ParentOf", fields: [parentUserId], references: [id], onDelete: Cascade)
   child  User @relation("ChildOf", fields: [childUserId], references: [id], onDelete: Cascade)
@@ -1167,19 +1215,19 @@ model ReferralConversion {
   status             ReferralStatus @default(PENDING)
   ownerRewardTxId    String? // REFERRAL_REWARD Transaction paid to the referrer
   referredRewardTxId String? // REFERRAL_REWARD Transaction paid to the referred user
-  tier2RewardTxId   String?
+  tier2RewardTxId    String?
   payoutError        String? // last payout failure reason — kept for retriable visibility
   // #397 — fraud/abuse review trail. fraudReasons/flaggedAt are set when the
   // heuristic in evaluateReferralFraudRisk() flags a conversion instead of
   // activating it; reviewedAt/reviewedBy/reviewDecision are set once an admin
   // resolves it via resolveFlaggedConversion().
-  fraudReasons   String[] @default([])
-  flaggedAt      DateTime?
-  reviewedAt     DateTime?
-  reviewedBy     String?
-  reviewDecision String? // 'approved' | 'rejected'
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  fraudReasons       String[]       @default([])
+  flaggedAt          DateTime?
+  reviewedAt         DateTime?
+  reviewedBy         String?
+  reviewDecision     String? // 'approved' | 'rejected'
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
 
   referralCode ReferralCode @relation(fields: [referralCodeId], references: [id], onDelete: Cascade)
   referredUser User         @relation(fields: [referredUserId], references: [id], onDelete: Cascade)
@@ -1315,6 +1363,8 @@ model PublishedStrategy {
   id             String    @id @default(uuid())
   userId         String    @unique
   label          String
+  description    String?
+  tags           String[]  @default([])
   strategyConfig Json
   configVersion  Int       @default(1)
   isPublished    Boolean   @default(false)
@@ -1329,6 +1379,19 @@ model PublishedStrategy {
 
   @@index([isPublished])
   @@map("published_strategies")
+}
+
+/// Admin-curated tag vocabulary for marketplace discovery (#527). Publishers
+/// pick from this list — never free text — so search stays clean of tag spam.
+model MarketplaceTag {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  label     String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([isActive])
+  @@map("marketplace_tags")
 }
 
 /// A follower's opt-in link to a published strategy (#285).
@@ -1707,11 +1770,11 @@ model AuditAnchor {
 
 // --- Issue #371: GDPR/CCPA Data Export & Right-to-Erasure ---
 model DataSubjectRequest {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   userId      String
-  type        String   // EXPORT | ERASURE
-  status      String   // PENDING | PROCESSING | COMPLETED | PARTIAL | FAILED | REJECTED
-  createdAt   DateTime @default(now())
+  type        String // EXPORT | ERASURE
+  status      String // PENDING | PROCESSING | COMPLETED | PARTIAL | FAILED | REJECTED
+  createdAt   DateTime  @default(now())
   completedAt DateTime?
 
   @@index([userId])
@@ -1723,7 +1786,7 @@ model RedactionManifest {
   requestId String
   modelName String
   recordId  String
-  action    String   // DELETED | ANONYMIZED
+  action    String // DELETED | ANONYMIZED
   createdAt DateTime @default(now())
 
   @@index([requestId])
@@ -1750,20 +1813,20 @@ enum CasePriority {
 }
 
 model ComplianceCase {
-  id               String       @id @default(uuid())
-  userId           String
-  status           CaseStatus   @default(OPEN)
-  priority         CasePriority
-  openedReason     String       // "score_threshold" | "manual" | "sanctions_hit" | "law_enforcement_request"
-  triggerScore     Int?
+  id                String       @id @default(uuid())
+  userId            String
+  status            CaseStatus   @default(OPEN)
+  priority          CasePriority
+  openedReason      String // "score_threshold" | "manual" | "sanctions_hit" | "law_enforcement_request"
+  triggerScore      Int?
   scoreModelVersion String?
-  assignedTo       String?      // AdminApiKey.id / reviewer identity
-  slaDueAt         DateTime?
-  relatedTxnIds    String[]
-  relatedCaseIds   String[]
-  createdAt        DateTime     @default(now())
-  closedAt         DateTime?
-  outcome          String?      // mirrors terminal status + a reason
+  assignedTo        String? // AdminApiKey.id / reviewer identity
+  slaDueAt          DateTime?
+  relatedTxnIds     String[]
+  relatedCaseIds    String[]
+  createdAt         DateTime     @default(now())
+  closedAt          DateTime?
+  outcome           String? // mirrors terminal status + a reason
 
   @@index([userId])
   @@index([status])
@@ -1773,9 +1836,9 @@ model ComplianceCase {
 model CaseEvent {
   id        String   @id @default(uuid())
   caseId    String
-  type      String   // NOTE | STATUS_CHANGE | ASSIGNMENT | EVIDENCE | DECISION | FREEZE | UNFREEZE | SAR_DRAFTED | SAR_FILED
-  actor     String   // reviewer identity
-  body      Json     // structured per type
+  type      String // NOTE | STATUS_CHANGE | ASSIGNMENT | EVIDENCE | DECISION | FREEZE | UNFREEZE | SAR_DRAFTED | SAR_FILED
+  actor     String // reviewer identity
+  body      Json // structured per type
   createdAt DateTime @default(now())
 
   @@index([caseId, createdAt])
@@ -1785,15 +1848,15 @@ model CaseEvent {
 // --- Issue #370: FATF Travel Rule Data Collection ---
 model TravelRuleRecord {
   id               String    @id @default(uuid())
-  transactionId    String?   // or outboxOpId / fiatOrderId
-  direction        String    // OUTBOUND | INBOUND
-  amountBaseCcy    Decimal   @db.Decimal(36,18)
+  transactionId    String? // or outboxOpId / fiatOrderId
+  direction        String // OUTBOUND | INBOUND
+  amountBaseCcy    Decimal   @db.Decimal(36, 18)
   baseCurrency     String
-  originator       Json      // { name, accountOrWallet, address?, idNumber?, idType? }
-  beneficiary      Json      // { name, accountOrWallet }
-  counterpartyVasp Json?     // { name, did?, classification: 'VASP'|'UNHOSTED'|'UNKNOWN' }
-  dataSource       String    // KYC_PROFILE | USER_ATTESTED | PROVIDER
-  status           String    // PENDING_DATA | READY | TRANSMITTED | EXEMPT
+  originator       Json // { name, accountOrWallet, address?, idNumber?, idType? }
+  beneficiary      Json // { name, accountOrWallet }
+  counterpartyVasp Json? // { name, did?, classification: 'VASP'|'UNHOSTED'|'UNKNOWN' }
+  dataSource       String // KYC_PROFILE | USER_ATTESTED | PROVIDER
+  status           String // PENDING_DATA | READY | TRANSMITTED | EXEMPT
   transmittedAt    DateTime?
   createdAt        DateTime  @default(now())
 
@@ -1804,17 +1867,17 @@ model TravelRuleRecord {
 
 // --- Issue #338: Path-Payment DEX Auto-Routing ---
 model AssetConversion {
-  id                String   @id @default(uuid())
-  transactionId     String?  @unique
-  sourceAsset       String
-  sourceAmount      Decimal  @db.Decimal(36, 18)
-  destAsset         String
-  destAmount        Decimal  @db.Decimal(36, 18)
-  quotedDestAmount  Decimal  @db.Decimal(36, 18)
+  id                  String   @id @default(uuid())
+  transactionId       String?  @unique
+  sourceAsset         String
+  sourceAmount        Decimal  @db.Decimal(36, 18)
+  destAsset           String
+  destAmount          Decimal  @db.Decimal(36, 18)
+  quotedDestAmount    Decimal  @db.Decimal(36, 18)
   realizedSlippageBps Int
-  path              Json     // asset ids, for audit
-  rpcSource         String
-  createdAt         DateTime @default(now())
+  path                Json // asset ids, for audit
+  rpcSource           String
+  createdAt           DateTime @default(now())
 
   @@index([transactionId])
   @@map("asset_conversions")
@@ -1822,15 +1885,15 @@ model AssetConversion {
 
 // --- Issue #340: Claimable-Balance & Unmatched-Inbound Ingestion ---
 model InboundOperation {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   account        String
   txHash         String
   operationIndex Int
-  amount         Decimal  @db.Decimal(36, 18)
+  amount         Decimal   @db.Decimal(36, 18)
   asset          String
-  isProcessed    Boolean  @default(false)
+  isProcessed    Boolean   @default(false)
   processedAt    DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   @@unique([txHash, operationIndex])
   @@index([account])
@@ -1839,10 +1902,10 @@ model InboundOperation {
 }
 
 model InboundCursor {
-  id        String   @id @default(uuid())
-  account   String   @unique
+  id         String   @id @default(uuid())
+  account    String   @unique
   lastLedger Int
-  updatedAt DateTime @updatedAt
+  updatedAt  DateTime @updatedAt
 
   @@map("inbound_cursors")
 }
@@ -1855,15 +1918,15 @@ enum TreasuryTier {
 }
 
 model TreasuryAccount {
-  id             String       @id @default(uuid())
-  tier           TreasuryTier
-  publicKey      String       @unique
-  signerScheme   String       // "1-of-1" | "2-of-3" | "3-of-5"
-  targetLowXlm   Decimal      @db.Decimal(36, 18)
-  targetHighXlm  Decimal      @db.Decimal(36, 18)
-  assetPolicy    Json         // per-asset low/high bands
-  isActive       Boolean      @default(true)
-  createdAt      DateTime     @default(now())
+  id            String       @id @default(uuid())
+  tier          TreasuryTier
+  publicKey     String       @unique
+  signerScheme  String // "1-of-1" | "2-of-3" | "3-of-5"
+  targetLowXlm  Decimal      @db.Decimal(36, 18)
+  targetHighXlm Decimal      @db.Decimal(36, 18)
+  assetPolicy   Json // per-asset low/high bands
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
 
   @@index([tier])
   @@index([isActive])
@@ -1871,16 +1934,16 @@ model TreasuryAccount {
 }
 
 model TreasurySweep {
-  id           String       @id @default(uuid())
-  fromTier     TreasuryTier
-  toTier       TreasuryTier
-  asset        String
-  amount       Decimal      @db.Decimal(36, 18)
-  outboxOpId   String?
-  status       String       // PLANNED | SUBMITTED | CONFIRMED | FAILED
-  reason       String       // "hot_over_high_band" | "warm_under_low_band" | "manual"
-  createdAt    DateTime     @default(now())
-  confirmedAt  DateTime?
+  id          String       @id @default(uuid())
+  fromTier    TreasuryTier
+  toTier      TreasuryTier
+  asset       String
+  amount      Decimal      @db.Decimal(36, 18)
+  outboxOpId  String?
+  status      String // PLANNED | SUBMITTED | CONFIRMED | FAILED
+  reason      String // "hot_over_high_band" | "warm_under_low_band" | "manual"
+  createdAt   DateTime     @default(now())
+  confirmedAt DateTime?
 
   @@index([status])
   @@index([fromTier])
@@ -1889,18 +1952,69 @@ model TreasurySweep {
 }
 
 model MultisigEnvelope {
-  id           String   @id @default(uuid())
-  sweepId      String?
-  publicKey    String
-  threshold    Int
-  signatures   Json     // collected signatures
-  status       String   // PENDING | COLLECTING | READY | EXPIRED
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
+  id               String   @id @default(uuid())
+  sweepId          String?
+  publicKey        String
+  threshold        Int
+  signatures       Json // collected signatures
+  status           String // PENDING | COLLECTING | READY | EXPIRED
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  /// The signer set version active when this envelope was opened (#528). A
+  /// rotation finalizing mid-collection never invalidates an in-flight
+  /// envelope — it keeps validating against the set it was opened under.
+  signerSetVersion Int      @default(1)
 
   @@index([status])
   @@index([expiresAt])
   @@map("multisig_envelopes")
+}
+
+enum SignerRotationStatus {
+  PENDING
+  DUAL_ACTIVE
+  FINALIZED
+  CANCELLED
+}
+
+/// Signer rotation with a dual-active window (#528): both the old and new
+/// key are valid signers from the moment a rotation is recorded, so signing
+/// capacity never drops below threshold mid-rotation. Only a DUAL_ACTIVE
+/// rotation may be finalized.
+model SignerRotation {
+  id                String               @id @default(uuid())
+  treasuryAccountId String
+  oldSignerKey      String
+  newSignerKey      String
+  status            SignerRotationStatus @default(PENDING)
+  dualActiveSince   DateTime?
+  finalizedAt       DateTime?
+  initiatedBy       String
+  createdAt         DateTime             @default(now())
+
+  @@index([treasuryAccountId, status])
+  @@map("signer_rotations")
+}
+
+/// Versioned, validated sweep policy for one tier pair (#528). A change never
+/// mutates an existing row — createPolicyVersion deactivates the current
+/// active policy and inserts a new one, so every policy change is an
+/// auditable new version.
+model TreasurySweepPolicy {
+  id                    String       @id @default(uuid())
+  fromTier              TreasuryTier
+  toTier                TreasuryTier
+  maxHotBalance         Decimal      @db.Decimal(36, 18)
+  sweepIntervalMinutes  Int
+  minSweepAmount        Decimal      @db.Decimal(36, 18)
+  requiresApprovalAbove Decimal?     @db.Decimal(36, 18)
+  version               Int
+  isActive              Boolean      @default(true)
+  createdBy             String
+  createdAt             DateTime     @default(now())
+
+  @@index([fromTier, toTier, isActive])
+  @@map("treasury_sweep_policies")
 }
 
 // --- Issue #350: Liquidity Risk & Time-to-Exit Estimation ---
@@ -1909,10 +2023,10 @@ model ProtocolLiquiditySnapshot {
   protocolName         String
   assetSymbol          String
   poolTvl              Decimal  @db.Decimal(36, 18)
-  availableLiquidity    Decimal  @db.Decimal(36, 18)
+  availableLiquidity   Decimal  @db.Decimal(36, 18)
   dailyVolume          Decimal  @db.Decimal(36, 18)
-  withdrawalQueueDepth  Int?
-  depthCurve           Json     // [{ sizeUsd, priceImpactBps }]
+  withdrawalQueueDepth Int?
+  depthCurve           Json // [{ sizeUsd, priceImpactBps }]
   fetchedAt            DateTime @default(now())
 
   @@unique([protocolName, assetSymbol, fetchedAt])
@@ -1935,17 +2049,17 @@ enum BreakerState {
 }
 
 model AgentCircuitBreaker {
-  id           String       @id @default(uuid())
-  scope        BreakerScope
-  scopeKey     String       // "" for GLOBAL, protocolName, or userId
-  state        BreakerState @default(CLOSED)
-  trippedRule  String?      // "abnormal_loss" | "depeg" | "oscillation" | "stale_data" | "manual"
-  trippedAt    DateTime?
-  detail       Json?        // the measurements that tripped it
-  resetBy      String?      // admin identity on manual reset
-  resetAt      DateTime?
-  autoResetAt  DateTime?    // earliest time HALF_OPEN is allowed
-  updatedAt    DateTime     @updatedAt
+  id          String       @id @default(uuid())
+  scope       BreakerScope
+  scopeKey    String // "" for GLOBAL, protocolName, or userId
+  state       BreakerState @default(CLOSED)
+  trippedRule String? // "abnormal_loss" | "depeg" | "oscillation" | "stale_data" | "manual"
+  trippedAt   DateTime?
+  detail      Json? // the measurements that tripped it
+  resetBy     String? // admin identity on manual reset
+  resetAt     DateTime?
+  autoResetAt DateTime? // earliest time HALF_OPEN is allowed
+  updatedAt   DateTime     @updatedAt
 
   @@unique([scope, scopeKey])
   @@index([state])
