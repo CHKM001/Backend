@@ -49,6 +49,8 @@ export const SOCKET_ONLY_EVENT_TYPES = [
   'security.new_session',
   /** #472 — a session was revoked (logout, admin, or refresh-token reuse). */
   'security.session_revoked',
+  /** #515 — suspicious session anomaly detected (impossible location, device change, subnet jump). */
+  'security.session_anomaly',
 ] as const
 
 export type SocketOnlyEventType = (typeof SOCKET_ONLY_EVENT_TYPES)[number]
@@ -92,6 +94,7 @@ export const EVENT_TYPE_TOPIC: Record<UserEventType, UserEventTopic> = {
   'security.api_key_changed': 'alerts',
   'security.new_session': 'alerts',
   'security.session_revoked': 'alerts',
+  'security.session_anomaly': 'alerts',
 }
 
 const SOCKET_ONLY = new Set<string>(SOCKET_ONLY_EVENT_TYPES)
