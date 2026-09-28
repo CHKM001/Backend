@@ -16,6 +16,7 @@ export const USER_EVENT_TOPICS = [
   'agent',
   'alerts',
   'strategies',
+  'account',
 ] as const
 
 export type UserEventTopic = (typeof USER_EVENT_TOPICS)[number]
@@ -49,6 +50,8 @@ export const SOCKET_ONLY_EVENT_TYPES = [
   'security.new_session',
   /** #472 — a session was revoked (logout, admin, or refresh-token reuse). */
   'security.session_revoked',
+  /** #548 — admin impersonation session started. */
+  'account.impersonation_started',
 ] as const
 
 export type SocketOnlyEventType = (typeof SOCKET_ONLY_EVENT_TYPES)[number]
@@ -92,6 +95,7 @@ export const EVENT_TYPE_TOPIC: Record<UserEventType, UserEventTopic> = {
   'security.api_key_changed': 'alerts',
   'security.new_session': 'alerts',
   'security.session_revoked': 'alerts',
+  'account.impersonation_started': 'account',
 }
 
 const SOCKET_ONLY = new Set<string>(SOCKET_ONLY_EVENT_TYPES)

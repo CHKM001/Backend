@@ -11,6 +11,7 @@ import { publishUserEvent } from '../events/publisher'
 import { EVENT_TYPE_TOPIC } from '../events/types'
 import { sendWhatsAppMessage } from '../utils/twilio-client'
 import { formatAlertTriggeredReply } from '../whatsapp/formatters'
+import { sendPushNotification } from '../controllers/push-controller'
 import {
   compare,
   cooldownCutoff,
@@ -200,9 +201,11 @@ async function deliverAlert(
   }
 
   const wantsWebhook =
-    rule.deliveryChannel === 'WEBHOOK' || rule.deliveryChannel === 'BOTH'
+    rule.deliveryChannel === 'WEBHOOK' || rule.deliveryChannel === 'BOTH' || rule.deliveryChannel === 'ALL'
   const wantsWhatsApp =
-    rule.deliveryChannel === 'WHATSAPP' || rule.deliveryChannel === 'BOTH'
+    rule.deliveryChannel === 'WHATSAPP' || rule.deliveryChannel === 'BOTH' || rule.deliveryChannel === 'ALL'
+  const wantsPush =
+    rule.deliveryChannel === 'PUSH' || rule.deliveryChannel === 'ALL'
 
   // #316: the alert always reaches the user's real-time stream — that is the
   // channel they did not have to configure. The webhook leg stays opt-in via
@@ -235,6 +238,16 @@ async function deliverAlert(
       })
       await sendWhatsAppMessage({ to: `whatsapp:${user.phone}`, body })
     }
+  }
+
+  if (wantsPush) {
+    const title = `Alert: ${rule.metric}`
+    const body = `${rule.metric} is ${observedValue} (threshold: ${threshold})`
+    await sendPushNotification(rule.userId, title, body, data).catch((err) => {
+      logger.warn(`[AlertRules] Failed to send push notification for rule ${rule.id}`, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 }
 
