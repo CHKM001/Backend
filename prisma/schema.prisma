@@ -941,6 +941,8 @@ model WebhookDelivery {
   subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([subscriptionId])
+  @@index([subscriptionId, createdAt])
+  @@index([subscriptionId, status, createdAt])
   @@index([status])
   @@index([createdAt])
   @@map("webhook_deliveries")
@@ -960,6 +962,7 @@ model WebhookDeadLetter {
   subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([subscriptionId, status])
+  @@index([subscriptionId, status, firstFailedAt])
   @@map("webhook_dead_letters")
 }
 
@@ -1732,6 +1735,7 @@ model UserWebhookDelivery {
 
   @@unique([endpointId, userEventSeq])
   @@index([endpointId])
+  @@index([endpointId, createdAt])
   @@index([status])
   @@map("user_webhook_deliveries")
 }
