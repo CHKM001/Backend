@@ -53,6 +53,8 @@ export const ADMIN_SCOPES = [
   // #529 — DB-backed protocol risk metadata review workflow.
   'risk-metadata:read',
   'risk-metadata:write',
+  // #548 — admin impersonation: read-only, audited "view as user" support.
+  'admin:impersonate',
   'super',
 ] as const
 export type AdminScope = (typeof ADMIN_SCOPES)[number]

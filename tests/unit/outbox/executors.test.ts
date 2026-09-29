@@ -37,6 +37,10 @@ describe('resolveSignerPublicKey — treasury_sweep', () => {
     expect(key).toBe('GHOTACCOUNT')
     expect(db.treasuryAccount.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { tier: 'HOT', isActive: true } })
+    )
+  })
+})
+
 const mockDepositForUser = jest.fn() as jest.Mock
 const mockWithdrawForUser = jest.fn() as jest.Mock
 const mockTriggerRebalance = jest.fn() as jest.Mock
