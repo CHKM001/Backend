@@ -29,6 +29,7 @@ import { JwtAdapter } from '../config'
 import { logger } from '../utils/logger'
 import { publishUserEvent } from '../events/publisher'
 import { closeUserSockets } from '../ws/server'
+import { invalidateAllUserCaches } from '../utils/user-cache-invalidation'
 
 /** Refresh tokens are high-entropy random bytes, so a fast hash is the right
  *  lookup key; the bcrypt hash is what actually verifies the secret. */
@@ -294,7 +295,7 @@ export async function revokeSession(
     approxLocation?: string | null
   }
 ): Promise<void> {
-  await db.session.update({
+  const session = await db.session.update({
     where: { id: sessionId },
     data: {
       revokedAt: new Date(),
@@ -304,18 +305,21 @@ export async function revokeSession(
       refreshTokenUsedAt: null,
       refreshTokenExpiresAt: null,
     },
+    select: { userId: true },
   })
 
-  if (context?.userId) {
-    // A revoked session must also drop the user's live sockets on this pod; the
-    // per-connection recheck would catch it within WS_SESSION_RECHECK_MS anyway.
-    closeUserSockets(context.userId, 'Session revoked')
+  const targetUserId = session.userId
 
-    publishUserEvent(context.userId, 'alerts', 'security.session_revoked', {
+  if (targetUserId) {
+    // Invalidate cached user state and drop live sockets on session revocation (#514)
+    closeUserSockets(targetUserId, 'Session revoked')
+    await invalidateAllUserCaches(targetUserId)
+
+    publishUserEvent(targetUserId, 'alerts', 'security.session_revoked', {
       sessionId,
       reason,
-      deviceType: context.deviceType ?? null,
-      approxLocation: context.approxLocation ?? null,
+      deviceType: context?.deviceType ?? null,
+      approxLocation: context?.approxLocation ?? null,
       revokedAt: new Date().toISOString(),
     }).catch((err) =>
       logger.warn('[Auth] Failed to emit security.session_revoked', { err })
