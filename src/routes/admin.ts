@@ -19,6 +19,7 @@ import db from '../db'
 import { revokeSession } from '../services/refresh-token.service'
 import { alertingService } from '../services/alerting'
 import { verifyAuditChain } from '../audit/chain'
+import { getJobDashboardSnapshot } from '../utils/job-metrics'
 import {
   listBreakers,
   manualTripBreaker,
@@ -142,6 +143,32 @@ router.get(
       res
         .status(500)
         .json({ success: false, error: 'Audit verification failed' })
+    }
+  }
+)
+
+router.get(
+  '/jobs/dashboard',
+  requireAdminScope('metrics:read'),
+  async (req: Request, res: Response) => {
+    try {
+      const jobSnapshot = await getJobDashboardSnapshot()
+      const dlqSize = await DeadLetterQueue.getSize()
+      const dlqBreakdown = await DeadLetterQueue.getStatusBreakdown()
+
+      res.status(200).json({
+        timestamp: jobSnapshot.timestamp,
+        jobs: jobSnapshot.jobs,
+        dlq: {
+          size: dlqSize,
+          statusBreakdown: dlqBreakdown,
+          triageRunbook: '/docs/JOB_TRIAGE_RUNBOOK.md',
+        },
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      logger.error('[Admin] Failed to generate job dashboard:', { error: message })
+      res.status(500).json({ error: 'Failed to generate job dashboard', message })
     }
   }
 )
