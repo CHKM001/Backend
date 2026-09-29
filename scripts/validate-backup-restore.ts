@@ -26,10 +26,14 @@ export async function validateBackupAndRestore(): Promise<BackupValidationResult
 
   // Check 1: Database Connectivity & Core Table Inspection
   try {
-    const tableCheck = await db.$queryRaw<{ count: bigint }[]>`
+    const tableCheckQuery = db.$queryRaw<{ count: bigint }[]>`
       SELECT count(*) FROM information_schema.tables 
       WHERE table_schema = 'public'
     `
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Database query timeout (offline/unreachable)')), 1500)
+    )
+    const tableCheck = (await Promise.race([tableCheckQuery, timeout])) as { count: bigint }[]
     const tableCount = Number(tableCheck[0]?.count ?? 0)
     checks.push({
       name: 'database_tables_exist',
@@ -40,12 +44,12 @@ export async function validateBackupAndRestore(): Promise<BackupValidationResult
     checks.push({
       name: 'database_tables_exist',
       passed: false,
-      details: `Database connectivity failure: ${error.message}`,
+      details: `Database connectivity check skipped or failed: ${error.message}`,
     })
   }
 
   // Check 2: Wallet Encryption Key Availability
-  const encryptionKey = process.env.WALLET_ENCRYPTION_KEY || config.stellar?.walletEncryptionKey
+  const encryptionKey = process.env.WALLET_ENCRYPTION_KEY
   const hasValidEncryptionKey = Boolean(
     encryptionKey && (encryptionKey.length === 64 || encryptionKey.length === 32)
   )
@@ -59,7 +63,11 @@ export async function validateBackupAndRestore(): Promise<BackupValidationResult
 
   // Check 3: Audit & Transaction Schema Integrity
   try {
-    const userCount = await db.user.count()
+    const userQuery = db.user.count()
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Database query timeout (offline/unreachable)')), 1500)
+    )
+    const userCount = (await Promise.race([userQuery, timeout])) as number
     checks.push({
       name: 'data_integrity_user_table',
       passed: true,
@@ -69,7 +77,7 @@ export async function validateBackupAndRestore(): Promise<BackupValidationResult
     checks.push({
       name: 'data_integrity_user_table',
       passed: false,
-      details: `Failed to query user table: ${error.message}`,
+      details: `Database user table check skipped or failed: ${error.message}`,
     })
   }
 
@@ -82,6 +90,10 @@ export async function validateBackupAndRestore(): Promise<BackupValidationResult
 
   const allPassed = checks.every((c) => c.passed)
   const durationMs = Date.now() - startTime
+
+  try {
+    await db.$disconnect()
+  } catch {}
 
   const result: BackupValidationResult = {
     success: allPassed,

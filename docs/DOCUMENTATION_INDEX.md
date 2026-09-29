@@ -17,6 +17,7 @@
 - **[REBALANCE_EXPOSURE_COST.md](REBALANCE_EXPOSURE_COST.md)** - Rebalance exposure caps (#346) and grounded cost model + payback gate (#347): resolution, tighten-only merge, residual routing, conservative-by-default decisions
 - **[CORRELATION_DIVERSIFICATION.md](CORRELATION_DIVERSIFICATION.md)** - Portfolio APY correlation matrix + diversification score (#348): alignment, null-on-degenerate semantics, weighted score, caveat
 - **[YIELD_COMPOSITION.md](YIELD_COMPOSITION.md)** - Yield base/incentive decomposition + effective APY (#349): haircut model, schema columns, flag-gated consumption, emissions risk modifier, yield-breakdown endpoint
+- **[CONSENT_AND_PRIVACY_POLICY.md](CONSENT_AND_PRIVACY_POLICY.md)** - User consent boundaries, high-risk workflow checks & auditable bypass policy (#510)
 
 ### For DevOps/Deployment
 
