@@ -20,10 +20,13 @@
 - **[WEBHOOK_SECURITY.md](WEBHOOK_SECURITY.md)** - Inbound fiat webhook HMAC validation, freshness windows, replay receipts, and failure responses
 - **[PRISMA_QUERY_PERFORMANCE.md](PRISMA_QUERY_PERFORMANCE.md)** - Hot webhook query plans, supporting indexes, and the query-index regression check
 - **[NET_WORTH.md](NET_WORTH.md)** - Read-only external Stellar links, valuation/staleness semantics, and private scope
+- **[CONSENT_AND_PRIVACY_POLICY.md](CONSENT_AND_PRIVACY_POLICY.md)** - User consent boundaries, high-risk workflow checks & auditable bypass policy (#510)
 
 ### For DevOps/Deployment
 
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment guide for all environments
+- **[DISASTER_RECOVERY_REHEARSAL.md](DISASTER_RECOVERY_REHEARSAL.md)** - Disaster recovery rehearsal checklist, backup scope, retention policy & restore validation (#511)
+- **[JOB_TRIAGE_RUNBOOK.md](JOB_TRIAGE_RUNBOOK.md)** - Operational triage path for failed jobs, retries & DLQ volume buildup (#509)
 - **[MIGRATIONS.md](MIGRATIONS.md)** - Schema change process (#470): change classification A–D, backup and downtime impact assessment, validation steps, rollback rehearsal, three rollback tiers, PR checklist
 - **[RUNBOOK.md](RUNBOOK.md)** - Production incident runbook, incl. §6 database migration rollback
 - **[DEPENDENCY_AUDIT.md](DEPENDENCY_AUDIT.md)** - Dependency inventory, security advisories, upgrade backlog and exceptions
