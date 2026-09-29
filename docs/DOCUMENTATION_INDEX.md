@@ -17,10 +17,13 @@
 - **[REBALANCE_EXPOSURE_COST.md](REBALANCE_EXPOSURE_COST.md)** - Rebalance exposure caps (#346) and grounded cost model + payback gate (#347): resolution, tighten-only merge, residual routing, conservative-by-default decisions
 - **[CORRELATION_DIVERSIFICATION.md](CORRELATION_DIVERSIFICATION.md)** - Portfolio APY correlation matrix + diversification score (#348): alignment, null-on-degenerate semantics, weighted score, caveat
 - **[YIELD_COMPOSITION.md](YIELD_COMPOSITION.md)** - Yield base/incentive decomposition + effective APY (#349): haircut model, schema columns, flag-gated consumption, emissions risk modifier, yield-breakdown endpoint
+- **[CONSENT_AND_PRIVACY_POLICY.md](CONSENT_AND_PRIVACY_POLICY.md)** - User consent boundaries, high-risk workflow checks & auditable bypass policy (#510)
 
 ### For DevOps/Deployment
 
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment guide for all environments
+- **[DISASTER_RECOVERY_REHEARSAL.md](DISASTER_RECOVERY_REHEARSAL.md)** - Disaster recovery rehearsal checklist, backup scope, retention policy & restore validation (#511)
+- **[JOB_TRIAGE_RUNBOOK.md](JOB_TRIAGE_RUNBOOK.md)** - Operational triage path for failed jobs, retries & DLQ volume buildup (#509)
 - **[MIGRATIONS.md](MIGRATIONS.md)** - Schema change process (#470): change classification A–D, backup and downtime impact assessment, validation steps, rollback rehearsal, three rollback tiers, PR checklist
 - **[RUNBOOK.md](RUNBOOK.md)** - Production incident runbook, incl. §6 database migration rollback
 - **[DEPENDENCY_AUDIT.md](DEPENDENCY_AUDIT.md)** - Dependency inventory, security advisories, upgrade backlog and exceptions
