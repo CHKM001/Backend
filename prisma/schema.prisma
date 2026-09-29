@@ -281,6 +281,7 @@ model User {
   userEventSequence       UserEventSequence?
   userApiKeys             UserApiKey[]
   userWebhookEndpoints    UserWebhookEndpoint[]
+  linkedExternalWallets   LinkedExternalWallet[]
   emailIdentity           EmailIdentity?
   pushDeviceTokens        PushDeviceToken[]
 
@@ -871,6 +872,28 @@ model CustodialWallet {
   @@map("custodial_wallets")
 }
 
+/// Read-only public Stellar address linked by its owner for personal net-worth
+/// views. Links are self-reported and never grant signing or transaction access.
+model LinkedExternalWallet {
+  id                 String    @id @default(uuid())
+  userId             String
+  publicKey          String
+  label              String
+  verificationStatus String    @default("UNVERIFIED_SELF_REPORTED")
+  balances           Json?
+  addedAt            DateTime  @default(now())
+  lastSyncedAt       DateTime?
+  lastSyncAttemptAt  DateTime?
+  syncError          String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, publicKey])
+  @@index([userId, addedAt])
+  @@index([lastSyncAttemptAt])
+  @@map("linked_external_wallets")
+}
+
 // #339: Sponsored reserves — one row per platform-sponsored ledger entry
 model ReserveSponsorship {
   id             String    @id @default(uuid())
@@ -969,6 +992,8 @@ model WebhookDelivery {
   subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([subscriptionId])
+  @@index([subscriptionId, createdAt])
+  @@index([subscriptionId, status, createdAt])
   @@index([status])
   @@index([createdAt])
   @@map("webhook_deliveries")
@@ -988,6 +1013,7 @@ model WebhookDeadLetter {
   subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([subscriptionId, status])
+  @@index([subscriptionId, status, firstFailedAt])
   @@map("webhook_dead_letters")
 }
 
@@ -1014,14 +1040,31 @@ model AlertRule {
   snoozedUntil    DateTime?
   snoozeReason    String?
   isActive        Boolean         @default(true)
+  deletedAt       DateTime?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  @@index([userId, deletedAt])
   @@index([isActive, metric])
   @@map("alert_rules")
+}
+
+/// Append-only audit trail for user-scoped soft-delete and restore actions.
+/// Deliberately has no user foreign key so retention cannot cascade away audit.
+model UserDataAudit {
+  id           String   @id @default(uuid())
+  tenantUserId String
+  actorUserId  String
+  recordType   String
+  recordId     String
+  action       String
+  createdAt    DateTime @default(now())
+
+  @@index([tenantUserId, createdAt])
+  @@index([recordType, recordId])
+  @@map("user_data_audits")
 }
 
 model SubAccount {
@@ -1181,6 +1224,18 @@ model FiatOrder {
   @@index([status])
   @@index([createdAt])
   @@map("fiat_orders")
+}
+
+/// Hash-only receipts for authenticated inbound fiat callbacks. The provider
+/// plus SHA-256 body hash is the replay key; raw callback contents are not kept.
+model FiatWebhookReceipt {
+  id        String   @id @default(uuid())
+  provider  String
+  nonce     String
+  createdAt DateTime @default(now())
+
+  @@unique([provider, nonce])
+  @@map("fiat_webhook_receipts")
 }
 
 /// A time-boxed, provider-pinned quote returned by the best-execution quote
@@ -1352,16 +1407,17 @@ model LotDisposal {
 /// not via a DB constraint, since past goals (ACHIEVED/MISSED/CANCELLED) are
 /// kept for history.
 model SavingsGoal {
-  id             String     @id @default(uuid())
-  userId         String
-  positionId     String?
-  targetAmount   Decimal    @db.Decimal(36, 18)
-  startingAmount Decimal    @db.Decimal(36, 18)
-  targetDate     DateTime
-  riskCeiling    Int? // optional min protocol risk score (0-100), matches UserStrategyPreferences.riskCeiling
-  status         GoalStatus @default(ACTIVE)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id                      String     @id @default(uuid())
+  userId                  String
+  positionId              String?
+  targetAmount            Decimal    @db.Decimal(36, 18)
+  startingAmount          Decimal    @db.Decimal(36, 18)
+  targetDate              DateTime
+  riskCeiling             Int? // optional min protocol risk score (0-100), matches UserStrategyPreferences.riskCeiling
+  includeExternalHoldings Boolean    @default(false)
+  status                  GoalStatus @default(ACTIVE)
+  createdAt               DateTime   @default(now())
+  updatedAt               DateTime   @updatedAt
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   position Position? @relation(fields: [positionId], references: [id])
@@ -1731,6 +1787,7 @@ model UserWebhookDelivery {
 
   @@unique([endpointId, userEventSeq])
   @@index([endpointId])
+  @@index([endpointId, createdAt])
   @@index([status])
   @@map("user_webhook_deliveries")
 }
