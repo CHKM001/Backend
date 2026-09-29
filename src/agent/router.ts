@@ -4,6 +4,7 @@
 
 import { logger } from '../utils/logger'
 import { getCorrelationId } from '../utils/correlation'
+import { hasWashSaleRisk, isSameAssetRebuyLikely } from '../tax/washSale'
 import {
   ProtocolComparison,
   RebalanceDetails,
@@ -746,6 +747,54 @@ export async function executeRebalanceIfNeeded(
           : undefined,
         exposure: exposureContext?.exposure,
       })
+
+      // #550 - Wash-sale-aware rebalancing check (informational + opt-in soft deprioritization)
+      let washSaleRisk = false
+      const taxAwareRebalancing = userStrategyPreferences[0]?.taxAwareRebalancing ?? false
+      if (decision.shouldRebalance) {
+        const likelyRebuy = isSameAssetRebuyLikely(
+          userStrategyPreferences[0]?.strategyName ?? null,
+          decision.targetProtocol,
+          currentProtocol
+        )
+
+        if (likelyRebuy) {
+          const userJurisdiction = await db.user.findFirst({
+            where: { id: userStrategyPreferences[0]?.userId },
+            select: { taxJurisdiction: true },
+          })
+
+          if (userJurisdiction) {
+            washSaleRisk = hasWashSaleRisk(
+              'USDC',
+              new Date(),
+              userJurisdiction.taxJurisdiction,
+              likelyRebuy
+            )
+
+            if (washSaleRisk) {
+              logger.info('Wash-sale risk detected for rebalance', {
+                currentProtocol,
+                targetProtocol: decision.targetProtocol,
+                userId: userStrategyPreferences[0]?.userId,
+                taxAwareRebalancing,
+              })
+
+              if (taxAwareRebalancing) {
+                const higherThreshold = effectiveThresholds.minimumImprovement * 2
+                const targetProtocolData = allProtocols.find(p => p.name === decision.targetProtocol)
+                if (targetProtocolData) {
+                  const netImprovement = targetProtocolData.apy - currentApy
+                  if (netImprovement < higherThreshold) {
+                    decision.shouldRebalance = false
+                    decision.reasoning = 'Wash-sale risk: improvement below elevated threshold'
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
 
       if (
         decision.shouldRebalance &&

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { requireAuth } from '../middleware/authenticate'
 import { requireScope } from '../middleware/apiKeyAuth'
+import { idempotent } from '../middleware/idempotency'
 import { sensitiveRateLimiter } from '../middleware/rateLimiter'
 import { validate } from '../middleware/validate'
 import { processOnChainTransaction } from '../controllers/transaction-controller'
@@ -23,13 +24,17 @@ const depositSchema = z.object({
 // POST / — Initiates an on-chain deposit transaction.
 // Middleware chain:
 //   1. requireAuth  — ensures the request is authenticated
-//   2. validate     — validates req.body against depositSchema
+//   2. requireScope — ensures caller has deposit:write scope
+//   3. idempotent   — ensures retries do not trigger duplicate deposits (#483)
+//   4. sensitiveRateLimiter — tight rate limit for money movement
+//   5. validate     — validates req.body against depositSchema
 // On success, delegates the actual transaction processing to the shared
 // controller, tagging it as a 'DEPOSIT' operation.
 router.post(
   '/',
   requireAuth,
   requireScope('deposit:write'),
+  idempotent({ required: true, failClosed: true, ttlSeconds: 86400 }),
   // #473 — fund movement, same reasoning as withdrawals.
   sensitiveRateLimiter,
   validate({ body: depositSchema, errorMessage: 'Validation error' }),

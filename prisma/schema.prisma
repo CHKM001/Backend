@@ -208,6 +208,7 @@ enum DeliveryChannel {
   BOTH
   EMAIL
   ALL
+  PUSH
 }
 
 enum SubAccountPermission {
@@ -237,6 +238,7 @@ model User {
   riskTolerance     Int              @default(5)
   rebalanceStrategy String? // 'MAX_YIELD' | 'TARGET_ALLOCATION' | null (defaults to MAX_YIELD)
   strategyConfig    Json? // e.g. { "targetAllocations": { "Blend": 50, "Stellar DEX": 30, "Luma": 20 } }
+  taxAwareRebalancing Boolean         @default(false) // #550 - opt-in wash-sale-aware rebalancing
   isActive          Boolean          @default(true)
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
@@ -280,6 +282,7 @@ model User {
   userApiKeys             UserApiKey[]
   userWebhookEndpoints    UserWebhookEndpoint[]
   emailIdentity           EmailIdentity?
+  pushDeviceTokens        PushDeviceToken[]
 
   @@map("users")
 }
@@ -305,6 +308,31 @@ model UserApiKey {
   @@index([userId])
   @@index([tokenPrefix])
   @@map("user_api_keys")
+}
+
+enum PushPlatform {
+  IOS
+  ANDROID
+  WEB
+}
+
+model PushDeviceToken {
+  id         String       @id @default(uuid())
+  userId     String
+  token      String
+  platform   PushPlatform
+  isActive   Boolean      @default(true)
+  lastSeenAt DateTime     @default(now())
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, token])
+  @@index([userId])
+  @@index([token])
+  @@index([isActive])
+  @@map("push_device_tokens")
 }
 
 model IdempotencyRecord {
