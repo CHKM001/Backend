@@ -802,6 +802,22 @@ export const config = {
       process.env.LENDING_MAX_COLLATERAL_FRACTION_SOLD || '1'
     ),
   },
+  protectionFund: {
+    /** Fraction of platform revenue skimmed into the fund, in [0,1]. Off by default. */
+    revenueSkimFraction: parseFloat(
+      process.env.PROTECTION_FUND_REVENUE_SKIM_FRACTION || '0'
+    ),
+    /** Per-user coverage cap in stablecoin units. */
+    perUserCoverageCap: parseFloat(
+      process.env.PROTECTION_FUND_PER_USER_CAP || '10000'
+    ),
+    /** Minimum hold duration (ms) before a position is eligible for coverage. */
+    minHoldDurationMs: parseInt(
+      process.env.PROTECTION_FUND_MIN_HOLD_DURATION_MS || String(7 * 24 * 60 * 60 * 1000)
+    ),
+    /** Default asset symbol for the fund. */
+    defaultAssetSymbol: process.env.PROTECTION_FUND_DEFAULT_ASSET || 'USDC',
+  },
   outbox: {
     dispatchIntervalMs: parseInt(
       process.env.OUTBOX_DISPATCH_INTERVAL_MS || '15000'

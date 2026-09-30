@@ -523,6 +523,7 @@ model Position {
   yieldSnapshots  YieldSnapshot[]
   savingsGoals    SavingsGoal[]
   collateralLoans CollateralLoan[]
+  coverageClaims  CoverageClaim[]
 
   @@index([userId])
   @@index([status])
@@ -2335,4 +2336,85 @@ model PlatformBadDebt {
   @@index([status, recordedAt])
   @@index([loanId])
   @@map("platform_bad_debt")
+}
+
+// ─── #533 Protocol-Risk Protection Fund ───────────────────────────────────────
+
+model ProtectionFundBalance {
+  id          String   @id @default(uuid())
+  assetSymbol String
+  amount      Decimal  @db.Decimal(36, 18)
+  // BOOTSTRAP | ACCUMULATING | ACTIVE | DEPLETED
+  status      String   @default("BOOTSTRAP")
+  updatedAt   DateTime @updatedAt
+
+  @@unique([assetSymbol])
+  @@map("protection_fund_balances")
+}
+
+model ProtectionFundContribution {
+  id          String   @id @default(uuid())
+  source      String // "REVENUE_SKIM" | "MANUAL" | "TREASURY_TRANSFER"
+  assetSymbol String
+  amount      Decimal  @db.Decimal(36, 18)
+  // The revenue-stream reference (e.g. performance-fee transaction id)
+  sourceRef   String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("protection_fund_contributions")
+}
+
+model CoverageEvent {
+  id          String   @id @default(uuid())
+  protocolName String
+  // EXPLOIT | INSOLVENCY | GOVERNANCE_FAILURE (narrow, published definition)
+  cause       String
+  // ISO-8601 date-time strings, UTC
+  lossWindowStart String
+  lossWindowEnd   String
+  totalPlatformExposure Decimal @db.Decimal(36, 18)
+  declaredBy  String
+  // PENDING_REVIEW | APPROVED | REJECTED
+  status      String   @default("PENDING_REVIEW")
+  reviewedBy  String?
+  coverageTerms Json? // snapshot of coverage rules at declaration time
+  description String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  claims CoverageClaim[]
+
+  @@index([protocolName, status])
+  @@index([status])
+  @@map("coverage_events")
+}
+
+model CoverageClaim {
+  id          String   @id @default(uuid())
+  eventId     String
+  userId      String
+  positionId  String
+  // The user's loss in this position during the loss window
+  actualLoss  Decimal  @db.Decimal(36, 18)
+  // Net of any protocol-level recovery already received
+  netLoss     Decimal  @db.Decimal(36, 18)
+  // The amount the fund will actually pay (capped + pro-rated)
+  payoutAmount Decimal @db.Decimal(36, 18)
+  // FULL | PRORATED | ZERO
+  coverageType String
+  // PENDING | PAID | REJECTED
+  status      String   @default("PENDING")
+  outboxOpId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event CoverageEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, positionId])
+  @@index([userId, status])
+  @@index([eventId, status])
+  @@map("coverage_claims")
 }

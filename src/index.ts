@@ -83,6 +83,7 @@ import protocolsRouter from './routes/protocols'
 import depositRouter from './routes/deposit'
 import withdrawRouter from './routes/withdraw'
 import loansRouter from './routes/loans'
+import protectionFundRouter from './routes/protection-fund'
 import vaultRouter from './routes/vault'
 import analyticsRouter from './routes/analytics'
 import adminRouter from './routes/admin'
@@ -352,6 +353,8 @@ const apiRoutes: ApiRoute[] = [
   // portfolio: a loan is its own lifecycle with its own approval and rate
   // limits, and it must not inherit portfolio's read-only scope set.
   { path: 'loans', handlers: [loansRouter] },
+  // #533 — protocol-risk protection fund
+  { path: 'protection-fund', handlers: [protectionFundRouter] },
   { path: 'vault', handlers: [vaultRouter] },
   { path: 'analytics', handlers: [analyticsRouter] },
   { path: 'stellar', handlers: [stellarRouter] },
