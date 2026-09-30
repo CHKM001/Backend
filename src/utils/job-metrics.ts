@@ -83,3 +83,69 @@ export function recordJobCompletion(
 export function recordJobRetry(jobName: string): void {
   jobRetryTotal.inc({ job_name: jobName })
 }
+
+export async function getJobDashboardSnapshot(): Promise<{
+  timestamp: string
+  jobs: Record<
+    string,
+    {
+      successTotal: number
+      failureTotal: number
+      retryTotal: number
+      lastStatus: 'success' | 'failed' | 'unknown'
+    }
+  >
+}> {
+  const json = await register.getMetricsAsJSON()
+  const jobMap: Record<
+    string,
+    {
+      successTotal: number
+      failureTotal: number
+      retryTotal: number
+      lastStatus: 'success' | 'failed' | 'unknown'
+    }
+  > = {}
+
+  const getOrCreate = (name: string) => {
+    if (!jobMap[name]) {
+      jobMap[name] = {
+        successTotal: 0,
+        failureTotal: 0,
+        retryTotal: 0,
+        lastStatus: 'unknown',
+      }
+    }
+    return jobMap[name]
+  }
+
+  for (const metric of json) {
+    if (metric.name === 'job_success_total') {
+      for (const val of metric.values) {
+        const job = (val.labels as any).job_name
+        if (job) getOrCreate(job).successTotal = val.value
+      }
+    } else if (metric.name === 'job_failure_total') {
+      for (const val of metric.values) {
+        const job = (val.labels as any).job_name
+        if (job) getOrCreate(job).failureTotal = val.value
+      }
+    } else if (metric.name === 'job_retry_total') {
+      for (const val of metric.values) {
+        const job = (val.labels as any).job_name
+        if (job) getOrCreate(job).retryTotal = val.value
+      }
+    } else if (metric.name === 'job_completion_status') {
+      for (const val of metric.values) {
+        const job = (val.labels as any).job_name
+        if (job) getOrCreate(job).lastStatus = val.value === 1 ? 'success' : 'failed'
+      }
+    }
+  }
+
+  return {
+    timestamp: new Date().toISOString(),
+    jobs: jobMap,
+  }
+}
+

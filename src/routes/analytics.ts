@@ -24,6 +24,7 @@ import {
 } from '../analytics/scenarios'
 import { applyScenario } from '../analytics/stress'
 import { toCsv, CsvValue } from '../utils/csv'
+import { toSimplePdf } from '../utils/pdf'
 
 const router = Router()
 
@@ -32,7 +33,7 @@ const periodSchema = z.object({
 })
 
 const exportFormatSchema = z.object({
-  format: z.enum(['csv']).default('csv'),
+  format: z.enum(['csv', 'pdf']).default('csv'),
 })
 
 /**
@@ -327,17 +328,36 @@ router.get(
       apy: Number(s.apy),
     }))
 
-    const csv = toCsv(
-      USER_YIELD_CSV_HEADERS,
-      userYieldToCsvRows({
-        userId,
-        period: period.data.period,
-        totalYield,
-        periodYield,
-        averageApy,
-        points,
-      })
-    )
+    const rows = userYieldToCsvRows({
+      userId,
+      period: period.data.period,
+      totalYield,
+      periodYield,
+      averageApy,
+      points,
+    })
+
+    // PDF export (#538) — same data as the CSV export, rendered as a
+    // paginated plain-text report rather than a formatted table.
+    if (format.data.format === 'pdf') {
+      const pdf = toSimplePdf(`Portfolio Yield Report — ${period.data.period}`, [
+        `User: ${userId}`,
+        `Total yield: ${totalYield}`,
+        `Period yield: ${periodYield}`,
+        `Average APY: ${averageApy}`,
+        '',
+        'Date        Yield Amount    APY',
+        ...points.map((p) => `${p.date}  ${p.yieldAmount}  ${p.apy}`),
+      ])
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="user-yield-${period.data.period}.pdf"`
+      )
+      return res.status(200).send(pdf)
+    }
+
+    const csv = toCsv(USER_YIELD_CSV_HEADERS, rows)
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8')
     res.setHeader(

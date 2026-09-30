@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { requireAuth } from '../middleware/authenticate'
 import { validate } from '../middleware/validate'
+import { idempotent } from '../middleware/idempotency'
 import { sendError, sendNotFound, AppError } from '../utils/errors'
 import { logger } from '../utils/logger'
 import { approveSchema, rejectSchema } from '../validators/approval-validators'
@@ -56,6 +57,7 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
 router.post(
   '/:id/approve',
   requireAuth,
+  idempotent({ required: false, ttlSeconds: 86400 }),
   validate({ body: approveSchema, errorMessage: 'Validation error' }),
   async (req: Request, res: Response) => {
     try {
@@ -76,6 +78,7 @@ router.post(
 router.post(
   '/:id/reject',
   requireAuth,
+  idempotent({ required: false, ttlSeconds: 86400 }),
   validate({ body: rejectSchema, errorMessage: 'Validation error' }),
   async (req: Request, res: Response) => {
     try {
@@ -93,13 +96,18 @@ router.post(
 )
 
 // ── POST /:id/cancel — requester (admin cancellation: see routes/admin.ts) ──
-router.post('/:id/cancel', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const result = await cancel(req.params.id, req.auth!.userId)
-    res.json(result)
-  } catch (err) {
-    handleServiceError(res, err, 'Cancel')
+router.post(
+  '/:id/cancel',
+  requireAuth,
+  idempotent({ required: false, ttlSeconds: 86400 }),
+  async (req: Request, res: Response) => {
+    try {
+      const result = await cancel(req.params.id, req.auth!.userId)
+      res.json(result)
+    } catch (err) {
+      handleServiceError(res, err, 'Cancel')
+    }
   }
-})
+)
 
 export default router
