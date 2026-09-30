@@ -275,6 +275,7 @@ model User {
   // reports, never rewrites past disposal rows (which carry no jurisdiction
   // of their own — see src/tax/jurisdictions/).
   taxJurisdiction     TaxJurisdiction  @default(US)
+  displayCurrency     String           @default("USD")
 
   sessions                Session[]
   positions               Position[]

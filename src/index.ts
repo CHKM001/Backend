@@ -84,6 +84,7 @@ import depositRouter from './routes/deposit'
 import withdrawRouter from './routes/withdraw'
 import loansRouter from './routes/loans'
 import protectionFundRouter from './routes/protection-fund'
+import settingsRouter from './routes/settings'
 import vaultRouter from './routes/vault'
 import analyticsRouter from './routes/analytics'
 import adminRouter from './routes/admin'
@@ -355,6 +356,8 @@ const apiRoutes: ApiRoute[] = [
   { path: 'loans', handlers: [loansRouter] },
   // #533 — protocol-risk protection fund
   { path: 'protection-fund', handlers: [protectionFundRouter] },
+  // #534 — user settings (display currency)
+  { path: 'settings', handlers: [settingsRouter] },
   { path: 'vault', handlers: [vaultRouter] },
   { path: 'analytics', handlers: [analyticsRouter] },
   { path: 'stellar', handlers: [stellarRouter] },
