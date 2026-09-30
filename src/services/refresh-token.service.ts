@@ -42,7 +42,12 @@ async function hashRefreshToken(raw: string): Promise<string> {
 }
 
 export type RevocationReason =
-  'logout' | 'user' | 'logout_others' | 'admin' | 'refresh_token_reuse'
+  | 'logout'
+  | 'user'
+  | 'logout_others'
+  | 'admin'
+  | 'refresh_token_reuse'
+  | 'account_recovery'
 
 export type RefreshFailureReason =
   | 'invalid_token'
