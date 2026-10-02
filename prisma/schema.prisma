@@ -70,6 +70,31 @@ enum DeadLetterEventStatus {
   RESOLVED
 }
 
+enum OutboundNotificationStatus {
+  PENDING
+  PROCESSING
+  RETRYING
+  DELIVERED
+  DEAD
+}
+
+model OutboundNotification {
+  id            String                     @id @default(uuid())
+  channel       String
+  payload       Json
+  status        OutboundNotificationStatus @default(PENDING)
+  attempts      Int                        @default(0)
+  nextAttemptAt DateTime                   @default(now())
+  providerId    String?
+  lastError     String?                    @db.Text
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([createdAt])
+  @@map("outbound_notifications")
+}
+
 // #325 — durable outbox for on-chain money movements.
 enum OutboxOpKind {
   DEPOSIT
