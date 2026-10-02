@@ -19,6 +19,8 @@ tags:
     description: Stellar network fee oracle and congestion (public).
   - name: Analytics
     description: Portfolio performance and risk analytics
+  - name: TwoFactorAuth
+    description: TOTP-based two-factor authentication enrollment and login verification (#2FA)
   - name: Assistant
     description: |
       Tool-calling conversational assistant (#318). Replaces the rule-based
@@ -76,6 +78,86 @@ components:
       type: number
       format: double
       nullable: true
+
+    TotpEnrollResponse:
+      type: object
+      required: [otpauthUri, secret, recoveryCodes]
+      properties:
+        otpauthUri:
+          type: string
+          description: Standard otpauth:// URI for QR-code rendering.
+        secret:
+          type: string
+          description: Base32 TOTP secret. Returned only at enrollment; never re-exposed.
+        recoveryCodes:
+          type: array
+          items:
+            type: string
+          description: One-time backup codes. Returned only once at issuance; stored hashed.
+
+    TotpVerifyEnrollmentRequest:
+      type: object
+      required: [code]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          description: Six-digit code from the user's authenticator app.
+
+    TotpVerifyEnrollmentResponse:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        verifiedAt:
+          type: string
+          format: date-time
+
+    TotpLoginVerifyRequest:
+      type: object
+      required: [challengeToken, code]
+      additionalProperties: false
+      properties:
+        challengeToken:
+          type: string
+          description: Opaque token returned by /auth/verify when requiresTotp is true.
+        code:
+          type: string
+          description: Six-digit TOTP code or a one-time recovery code.
+
+    TotpLoginVerifyResponse:
+      type: object
+      required: [accessToken, refreshToken]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+
+    TotpDisableRequest:
+      type: object
+      required: [challenge, signature]
+      additionalProperties: false
+      properties:
+        challenge:
+          type: string
+          description: Fresh wallet-signature challenge issued for this disable operation.
+        signature:
+          type: string
+          description: Signature over the challenge proving control of the wallet.
+
+    TotpRegenerateRecoveryCodesResponse:
+      type: object
+      required: [recoveryCodes]
+      properties:
+        recoveryCodes:
+          type: array
+          items:
+            type: string
+          description: New one-time backup codes. All previous codes are invalidated.
 
     ExternalWalletLinkRequest:
       type: object
@@ -1385,6 +1467,125 @@ components:
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 paths:
+  # ── TOTP two-factor authentication (#2FA) ─────────────────────────────────────
+
+  /2fa/enroll:
+    post:
+      operationId: enrollTotp
+      summary: Begin TOTP 2FA enrollment
+      description: |
+        Generates a new TOTP secret and returns the otpauth:// URI plus
+        one-time recovery codes. The credential is NOT active until confirmed
+        via /2fa/verify-enrollment with a valid code from the authenticator app.
+      tags: [TwoFactorAuth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Enrollment secret and recovery codes (returned once).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TotpEnrollResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /2fa/verify-enrollment:
+    post:
+      operationId: verifyTotpEnrollment
+      summary: Confirm TOTP 2FA enrollment
+      description: Confirms the enrollment with a code from the authenticator app and activates the credential.
+      tags: [TwoFactorAuth]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TotpVerifyEnrollmentRequest'
+      responses:
+        '200':
+          description: Enrollment confirmed and active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TotpVerifyEnrollmentResponse'
+        '400':
+          description: Invalid or expired code.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /2fa/disable:
+    post:
+      operationId: disableTotp
+      summary: Disable TOTP 2FA
+      description: |
+        Disabling 2FA is a security downgrade and requires a fresh
+        wallet-signature challenge, not just an active session.
+      tags: [TwoFactorAuth]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TotpDisableRequest'
+      responses:
+        '204':
+          description: 2FA disabled.
+        '400':
+          description: Invalid challenge or signature.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /2fa/recovery-codes/regenerate:
+    post:
+      operationId: regenerateTotpRecoveryCodes
+      summary: Regenerate TOTP recovery codes
+      description: Issues a new set of one-time backup codes and invalidates all previous codes.
+      tags: [TwoFactorAuth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: New recovery codes (returned once).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TotpRegenerateRecoveryCodesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/2fa/verify:
+    post:
+      operationId: verifyTotpLogin
+      summary: Complete login with TOTP second factor
+      description: |
+        Completes login when /auth/verify returned requiresTotp. Accepts a
+        valid TOTP code (±1 step tolerance, replay-protected) or a one-time
+        recovery code.
+      tags: [TwoFactorAuth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TotpLoginVerifyRequest'
+      responses:
+        '200':
+          description: Session issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TotpLoginVerifyResponse'
+        '400':
+          description: Invalid, expired, or already-used code.
+        '401':
+          description: Invalid or expired challenge token.
+
   # ── Assistant endpoints (#318) ────────────────────────────────────────────────
 
   /assistant/chat:
