@@ -492,6 +492,7 @@ async function payOneReward(
       actor: 'SYSTEM',
       payload: {
         method: 'referral_reward',
+        transactionId: transaction.id,
         recipientAddress: address,
         amount,
         assetSymbol: asset,
@@ -506,17 +507,20 @@ async function payOneReward(
   try {
     const result = await dispatchOne(pending.opId)
     const succeeded = !result.status || result.status === 'success'
+    const stillPending = result.status === 'pending'
     await db.transaction.update({
       where: { id: pending.transaction.id },
       data: {
         txHash: result.hash,
-        status: succeeded
-          ? TransactionStatus.CONFIRMED
-          : TransactionStatus.FAILED,
+        status: stillPending
+          ? TransactionStatus.PENDING
+          : succeeded
+            ? TransactionStatus.CONFIRMED
+            : TransactionStatus.FAILED,
         confirmedAt: succeeded ? new Date() : null,
       },
     })
-    if (!succeeded) {
+    if (!succeeded && !stillPending) {
       throw new Error('On-chain reward submission returned status=failed')
     }
     return pending.transaction.id
@@ -648,6 +652,25 @@ export async function payoutActivatedConversions(): Promise<{
     }
 
     if (hadError) continue // stays ACTIVATED — retried next sweep
+
+    const rewardTransactionIds = [
+      config.referral.ownerReward > 0 ? ownerRewardTxId : null,
+      config.referral.referredReward > 0 ? referredRewardTxId : null,
+    ].filter((id): id is string => id !== null)
+    if (rewardTransactionIds.length > 0) {
+      const rewardTransactions = await db.transaction.findMany({
+        where: { id: { in: rewardTransactionIds } },
+        select: { id: true, status: true },
+      })
+      if (
+        rewardTransactions.length !== rewardTransactionIds.length ||
+        rewardTransactions.some(
+          (transaction) => transaction.status !== 'CONFIRMED'
+        )
+      ) {
+        continue
+      }
+    }
 
     // Every owed leg is now paid. Advance to REWARDED (terminal).
     await db.referralConversion.update({

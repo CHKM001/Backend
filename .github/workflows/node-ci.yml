@@ -75,6 +75,11 @@ jobs:
       - name: Run format check
         run: npm run format:check
 
+      # #497 — catch environment drift between local, staging, and production
+      # before it can reach a deploy (fails when a core startup key is absent).
+      - name: Environment parity check
+        run: npm run env:parity
+
       # Build the project
       - name: Build project
         run: npm run build

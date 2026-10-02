@@ -78,6 +78,7 @@ export const createUserWebhookEndpointSchema = z.object({
     .array(z.enum(WEBHOOK_EVENTS))
     .min(1, 'At least one event is required'),
   topicScope: z.array(z.string()).optional(),
+  // zod v4 requires explicit key and value schemas for records.
   filterJson: z.record(z.string(), z.any()).nullable().optional(),
 })
 
@@ -88,6 +89,7 @@ export const updateUserWebhookEndpointSchema = z.object({
     .min(1, 'At least one event is required')
     .optional(),
   topicScope: z.array(z.string()).optional(),
+  // zod v4 requires explicit key and value schemas for records.
   filterJson: z.record(z.string(), z.any()).nullable().optional(),
   status: z.enum(['ACTIVE', 'PAUSED', 'DISABLED']).optional(),
 })

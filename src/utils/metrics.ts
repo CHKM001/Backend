@@ -8,6 +8,7 @@
  * - DLQ size
  * - Cursor lag
  * - Agent loop heartbeat state
+ * - Queue lag, worker saturation, and throughput
  */
 
 import client from 'prom-client'
@@ -183,6 +184,31 @@ export const agentSnapshotDuration = new client.Histogram({
   name: 'agent_snapshot_duration_seconds',
   help: 'Duration of balance snapshot operations in seconds',
   buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60],
+  registers: [register],
+})
+
+export const portfolioAnnualisedVolatilityPct = new client.Histogram({
+  name: 'portfolio_annualised_volatility_pct',
+  help: 'Annualised portfolio volatility observed by the rebalance circuit breaker, in percent',
+  buckets: [5, 10, 20, 30, 50, 75, 100, 150, 200],
+  registers: [register],
+})
+
+export const volatilityBreakerTripsTotal = new client.Counter({
+  name: 'portfolio_volatility_circuit_breaker_trips_total',
+  help: 'Total number of portfolio volatility circuit-breaker activations',
+  registers: [register],
+})
+
+export const volatilityBreakerActivePortfolios = new client.Gauge({
+  name: 'portfolio_volatility_circuit_breaker_active_portfolios',
+  help: 'Number of portfolios currently blocked by the volatility circuit breaker',
+  registers: [register],
+})
+
+export const volatilityBreakerEvaluationFailuresTotal = new client.Counter({
+  name: 'portfolio_volatility_circuit_breaker_evaluation_failures_total',
+  help: 'Total number of portfolio risk evaluations that failed closed',
   registers: [register],
 })
 
@@ -468,6 +494,22 @@ export function recordRebalanceCheck(status: 'success' | 'failed'): void {
  */
 export function recordRebalanceTriggered(): void {
   agentRebalancesTriggeredTotal.inc()
+}
+
+export function observePortfolioVolatility(volatilityPct: number): void {
+  portfolioAnnualisedVolatilityPct.observe(volatilityPct)
+}
+
+export function recordVolatilityBreakerTrip(): void {
+  volatilityBreakerTripsTotal.inc()
+}
+
+export function setVolatilityBreakerActivePortfolios(count: number): void {
+  volatilityBreakerActivePortfolios.set(count)
+}
+
+export function recordVolatilityBreakerEvaluationFailure(): void {
+  volatilityBreakerEvaluationFailuresTotal.inc()
 }
 
 /**
@@ -976,6 +1018,154 @@ export function recordAssistantFallback(
   reason: 'model_error' | 'budget_exceeded' | 'schema_error'
 ): void {
   assistantFallbackTotal.inc({ reason })
+}
+
+// ── Queue Health Metrics (#520) ─────────────────────────────────────────────
+
+export const queueLagSeconds = new client.Gauge({
+  name: 'queue_lag_seconds',
+  help: 'Time in seconds that the oldest item has been waiting in the queue',
+  labelNames: ['queue_name'] as const,
+  registers: [register],
+})
+
+export const queueDepth = new client.Gauge({
+  name: 'queue_depth',
+  help: 'Current number of items in the queue',
+  labelNames: ['queue_name'] as const,
+  registers: [register],
+})
+
+export const queueThroughputPerSecond = new client.Gauge({
+  name: 'queue_throughput_per_second',
+  help: 'Items processed per second (rolling 1-minute average)',
+  labelNames: ['queue_name'] as const,
+  registers: [register],
+})
+
+export const workerSaturation = new client.Gauge({
+  name: 'worker_saturation',
+  help: 'Worker utilization as a percentage (0-100)',
+  labelNames: ['worker_type'] as const,
+  registers: [register],
+})
+
+export const workerActiveCount = new client.Gauge({
+  name: 'worker_active_count',
+  help: 'Number of currently active workers',
+  labelNames: ['worker_type'] as const,
+  registers: [register],
+})
+
+export const workerIdleCount = new client.Gauge({
+  name: 'worker_idle_count',
+  help: 'Number of currently idle workers',
+  labelNames: ['worker_type'] as const,
+  registers: [register],
+})
+
+export const workerProcessingDuration = new client.Histogram({
+  name: 'worker_processing_duration_seconds',
+  help: 'Duration of worker task processing in seconds',
+  labelNames: ['worker_type', 'queue_name'] as const,
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60],
+  registers: [register],
+})
+
+export const queueProcessingErrorsTotal = new client.Counter({
+  name: 'queue_processing_errors_total',
+  help: 'Total number of queue processing errors',
+  labelNames: ['queue_name', 'error_type'] as const,
+  registers: [register],
+})
+
+export const queueBlockedSeconds = new client.Gauge({
+  name: 'queue_blocked_seconds',
+  help: 'Time in seconds the queue has been blocked (unable to process)',
+  labelNames: ['queue_name'] as const,
+  registers: [register],
+})
+
+/**
+ * Record queue lag (age of oldest item)
+ */
+export function recordQueueLag(queueName: string, lagSeconds: number): void {
+  queueLagSeconds.set({ queue_name: queueName }, lagSeconds)
+}
+
+/**
+ * Record queue depth (number of items)
+ */
+export function recordQueueDepth(queueName: string, depth: number): void {
+  queueDepth.set({ queue_name: queueName }, depth)
+}
+
+/**
+ * Record queue throughput (items per second)
+ */
+export function recordQueueThroughput(queueName: string, throughput: number): void {
+  queueThroughputPerSecond.set({ queue_name: queueName }, throughput)
+}
+
+/**
+ * Record worker saturation (utilization percentage)
+ */
+export function recordWorkerSaturation(
+  workerType: string,
+  saturation: number
+): void {
+  workerSaturation.set({ worker_type: workerType }, saturation)
+}
+
+/**
+ * Record active worker count
+ */
+export function recordWorkerActiveCount(
+  workerType: string,
+  count: number
+): void {
+  workerActiveCount.set({ worker_type: workerType }, count)
+}
+
+/**
+ * Record idle worker count
+ */
+export function recordWorkerIdleCount(
+  workerType: string,
+  count: number
+): void {
+  workerIdleCount.set({ worker_type: workerType }, count)
+}
+
+/**
+ * Record worker processing duration
+ */
+export function recordWorkerProcessingDuration(
+  workerType: string,
+  queueName: string,
+  durationSeconds: number
+): void {
+  workerProcessingDuration.observe(
+    { worker_type: workerType, queue_name: queueName },
+    durationSeconds
+  )
+}
+
+/**
+ * Record queue processing error
+ */
+export function recordQueueProcessingError(
+  queueName: string,
+  errorType: string
+): void {
+  queueProcessingErrorsTotal.inc({ queue_name: queueName, error_type: errorType })
+}
+
+/**
+ * Record queue blocked time
+ */
+export function recordQueueBlocked(queueName: string, blockedSeconds: number): void {
+  queueBlockedSeconds.set({ queue_name: queueName }, blockedSeconds)
 }
 
 /**

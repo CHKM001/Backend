@@ -31,6 +31,7 @@ import {
   type ActiveFollowConfig,
 } from '../strategy/service'
 import type { StrategyName } from './types'
+import { isPortfolioRebalanceAllowed } from './volatilityCircuitBreaker'
 import db from '../db'
 import {
   updateAgentHeartbeat as metricsUpdateAgentHeartbeat,
@@ -136,6 +137,14 @@ async function rebalanceCheckJob(): Promise<void> {
       )
       const followsByUser = await loadActiveFollowsForUsers(userIds)
 
+      const volatilityAllowedByUser = new Map<string, boolean>()
+      for (const userId of userIds) {
+        volatilityAllowedByUser.set(
+          userId,
+          await isPortfolioRebalanceAllowed(userId)
+        )
+      }
+
       // Load active goals for all users in one query (#446). Returns empty when
       // no users have active goals.
       const goalsByUser = new Map<string, boolean>()
@@ -143,6 +152,7 @@ async function rebalanceCheckJob(): Promise<void> {
         where: {
           userId: { in: userIds },
           status: 'ACTIVE',
+          includeExternalHoldings: false,
         },
         select: { userId: true },
       })
@@ -293,7 +303,11 @@ async function rebalanceCheckJob(): Promise<void> {
       }
 
       for (const batch of byProtocolAndStrategy.values()) {
-        const { protocol, positions: protocolPositions } = batch
+        const { protocol } = batch
+        const protocolPositions = batch.positions.filter((position) =>
+          volatilityAllowedByUser.get(position.userId)
+        )
+        if (protocolPositions.length === 0) continue
         const lead = effectiveByUser.get(protocolPositions[0].userId)!
 
         // #345 — skip batches affected by an OPEN breaker. Precedence:

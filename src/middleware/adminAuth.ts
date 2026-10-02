@@ -42,6 +42,14 @@ export const ADMIN_SCOPES = [
   // #394 — GDPR/CCPA right-to-erasure
   'erasure:write',
   'erasure:read',
+  // #528 — treasury sweep policies, emergency sweep, signer rotation.
+  'treasury:read',
+  'treasury:write',
+  // #529 — DB-backed protocol risk metadata review workflow.
+  'risk-metadata:read',
+  'risk-metadata:write',
+  // #548 — admin impersonation: read-only, audited "view as user" support.
+  'admin:impersonate',
   'super',
 ] as const
 export type AdminScope = (typeof ADMIN_SCOPES)[number]

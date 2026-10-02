@@ -64,6 +64,7 @@ import { scheduleProtocolRiskScoring } from './jobs/protocolRiskScoring'
 import { schedulePortfolioRiskJob } from './jobs/portfolioRisk'
 import { scheduleApprovalExpiry } from './jobs/approvalExpiry'
 import { scheduleReserveReconciliation } from './jobs/reserveReconciliation'
+import { scheduleLinkedExternalWalletSync } from './jobs/linkedExternalWalletSync'
 import { startEventListener, stopEventListener } from './stellar/events'
 import { startEventBridge, stopEventBridge } from './events/bridge'
 import { attachWebSocketServer, closeWebSocketServer } from './ws/server'
@@ -100,6 +101,7 @@ import streamRouter from './routes/stream'
 import notificationsRouter from './routes/notifications'
 import notificationDlqRouter from './routes/notification-dlq'
 import networkRouter from './routes/network'
+import netWorthRouter from './routes/net-worth'
 import {
   corsMiddleware,
   jsonBodyParser,
@@ -142,6 +144,7 @@ let portfolioRiskJobHandle: NodeJS.Timeout | null = null
 let approvalExpiryHandle: NodeJS.Timeout | null = null
 let reserveReconciliationHandle: NodeJS.Timeout | null = null
 let outboundNotificationsHandle: NodeJS.Timeout | null = null
+let linkedExternalWalletSyncHandle: NodeJS.Timeout | null = null
 
 function allServicesReady(): boolean {
   return Object.values(serviceStatus).every((s) => s.ready)
@@ -332,6 +335,7 @@ interface ApiRoute {
 
 const apiRoutes: ApiRoute[] = [
   { path: 'network', handlers: [networkRouter] },
+  { path: 'net-worth', handlers: [netWorthRouter] },
   { path: 'agent/decisions', handlers: [agentDecisionsRouter] },
   { path: 'agent', handlers: [internalRateLimiter, agentRouter] },
   { path: 'auth', handlers: [authRateLimiter, authRouter] },
@@ -488,6 +492,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
     clearInterval(reserveReconciliationHandle)
     reserveReconciliationHandle = null
     logger.info('[Shutdown] Reserve reconciliation timer cleared')
+  }
+
+  if (linkedExternalWalletSyncHandle) {
+    clearInterval(linkedExternalWalletSyncHandle)
+    linkedExternalWalletSyncHandle = null
+    logger.info('[Shutdown] External wallet sync timer cleared')
   }
 
   try {
@@ -708,6 +718,7 @@ async function main(): Promise<void> {
   approvalExpiryHandle = scheduleApprovalExpiry()
   reserveReconciliationHandle = scheduleReserveReconciliation()
   outboundNotificationsHandle = scheduleOutboundNotifications()
+  linkedExternalWalletSyncHandle = scheduleLinkedExternalWalletSync()
 }
 
 // ── Process-level error guards ────────────────────────────────────────────────

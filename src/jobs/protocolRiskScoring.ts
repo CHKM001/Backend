@@ -8,7 +8,6 @@ import { config } from '../config/env'
 import { recordJobSuccess, recordJobFailure } from '../utils/job-metrics'
 import { scheduleResilientJob } from './resilientScheduler'
 import { computeRiskScore, RateSample } from '../agent/riskScoring'
-import { PROTOCOL_RISK_METADATA } from '../config/protocolRiskMetadata'
 
 /**
  * Protocol risk scoring job.
@@ -32,15 +31,24 @@ export async function computeProtocolRiskScores(
     const jobName = 'protocol_risk_scoring'
 
     try {
-      // Distinct protocol names from rate history…
-      const rateProtocols = await db.protocolRate.findMany({
-        distinct: ['protocolName'],
-        select: { protocolName: true },
-      })
+      // Distinct protocol names from rate history, unioned with everything
+      // curated in ProtocolRiskMetadataEntry (#529) — so a curated-but-not-
+      // yet-scanned protocol still gets a (conservative) score, and a
+      // scanned-but-uncurated one is scored with the conservative
+      // UNAUDITED/unknown-age default.
+      const [rateProtocols, metadataEntries] = await Promise.all([
+        db.protocolRate.findMany({
+          distinct: ['protocolName'],
+          select: { protocolName: true },
+        }),
+        db.protocolRiskMetadataEntry.findMany({
+          select: { protocolName: true },
+        }),
+      ])
 
       const protocolNames = new Set<string>([
         ...rateProtocols.map((r: { protocolName: string }) => r.protocolName),
-        ...PROTOCOL_RISK_METADATA.map((m) => m.protocolName),
+        ...metadataEntries.map((m: { protocolName: string }) => m.protocolName),
       ])
 
       let scored = 0

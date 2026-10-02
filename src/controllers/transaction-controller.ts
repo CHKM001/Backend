@@ -89,15 +89,29 @@ async function enqueueAndDispatch(params: {
   try {
     const result = await dispatchOne(pending.opId)
     const succeeded = !result.status || result.status === 'success'
+    const stillPending = result.status === 'pending'
     return db.transaction.update({
       where: { id: pending.transaction.id },
       data: {
         txHash: result.hash,
-        status: succeeded ? 'CONFIRMED' : 'FAILED',
+        status: stillPending ? 'PENDING' : succeeded ? 'CONFIRMED' : 'FAILED',
         confirmedAt: succeeded ? new Date() : null,
       },
     })
   } catch (err) {
+    if (err instanceof Error && 'txHash' in err) {
+      await db.transaction
+        .update({
+          where: { id: pending.transaction.id },
+          data: {
+            status: 'PENDING',
+            txHash: String(err.txHash),
+          },
+        })
+        .catch(() => {})
+      throw err
+    }
+
     await db.transaction
       .update({
         where: { id: pending.transaction.id },
@@ -123,7 +137,7 @@ export interface ExecuteDepositParams {
 
 export interface ExecuteDepositResult {
   transaction: Transaction | null
-  status: 'CONFIRMED' | 'FAILED' | 'PENDING_APPROVAL'
+  status: 'CONFIRMED' | 'FAILED' | 'PENDING' | 'PENDING_APPROVAL'
   approvalRequestId?: string
 }
 
@@ -226,7 +240,7 @@ export async function executeDeposit(
 
   return {
     transaction,
-    status: transaction.status as 'CONFIRMED' | 'FAILED',
+    status: transaction.status as 'CONFIRMED' | 'FAILED' | 'PENDING',
   }
 }
 
@@ -247,7 +261,7 @@ export interface ExecuteWithdrawParams {
 
 export interface ExecuteWithdrawResult {
   transaction: Transaction | null
-  status: 'CONFIRMED' | 'FAILED' | 'PENDING_APPROVAL'
+  status: 'CONFIRMED' | 'FAILED' | 'PENDING' | 'PENDING_APPROVAL'
   approvalRequestId?: string
 }
 
@@ -362,7 +376,7 @@ export async function executeWithdraw(
 
   return {
     transaction,
-    status: transaction.status as 'CONFIRMED' | 'FAILED',
+    status: transaction.status as 'CONFIRMED' | 'FAILED' | 'PENDING',
   }
 }
 
@@ -440,7 +454,7 @@ export async function processOnChainTransaction(
 
     // Notification already dispatched inside executeWithdraw above — do not
     // re-publish here (that would double-fire transaction.confirmed).
-    return res.status(201).json({
+    return res.status(transaction.status === 'PENDING' ? 202 : 201).json({
       txHash: transaction.txHash,
       status: transaction.status,
       transaction: {
@@ -488,7 +502,7 @@ export async function processOnChainTransaction(
         : snapD.congestionLevel === 'elevated'
           ? 12
           : 8
-  return res.status(201).json({
+  return res.status(transaction.status === 'PENDING' ? 202 : 201).json({
     txHash: transaction.txHash,
     status: transaction.status,
     transaction: {

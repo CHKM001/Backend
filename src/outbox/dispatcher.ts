@@ -24,7 +24,11 @@ import { alertingService } from '../services/alerting'
 import db from '../db'
 import { publishUserEvent } from '../events/publisher'
 import { EVENT_TYPE_TOPIC } from '../events/types'
-import { TransactionResult } from '../stellar/types'
+import {
+  TransactionConfirmationTimeoutError,
+  TransactionResult,
+} from '../stellar/types'
+import { getTransactionStatus } from '../stellar/client'
 import { getSignerLock } from './signerLock'
 import { resolveSignerPublicKey, executeOutboxPayload } from './executors'
 import { sortForDispatch } from './stateMachine'
@@ -40,6 +44,8 @@ import {
   markFailedOrRetry,
   markFailedTerminal,
   mirrorLinkedTransaction,
+  mirrorPendingTransaction,
+  recordSubmittedTxHash,
   returnStuckOpToPending,
 } from './service'
 import {
@@ -187,10 +193,19 @@ async function submitClaimedOp(op: OutboxOpRecord): Promise<TransactionResult> {
 
   try {
     const result = await lock.withLock(op.signerPublicKey!, () =>
-      executeOutboxPayload(op.payload, feeMultiplier)
+      executeOutboxPayload(op.payload, feeMultiplier, (txHash) =>
+        recordSubmittedTxHash(op.id, txHash)
+      )
     )
 
-    if (!result.status || result.status === 'success') {
+    if (result.status === 'pending') {
+      await recordSubmittedTxHash(op.id, result.hash)
+      await mirrorPendingTransaction(op.payload, result.hash)
+      logger.warn('[Outbox] Confirmation pending; preserving submitted hash', {
+        opId: op.id,
+        txHash: result.hash,
+      })
+    } else if (!result.status || result.status === 'success') {
       await markConfirmed(op.id, result.hash)
       await mirrorLinkedTransaction(op.payload, {
         txHash: result.hash,
@@ -226,6 +241,19 @@ async function submitClaimedOp(op: OutboxOpRecord): Promise<TransactionResult> {
     return result
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof TransactionConfirmationTimeoutError) {
+      await recordSubmittedTxHash(op.id, err.txHash)
+      await mirrorPendingTransaction(op.payload, err.txHash)
+      logger.warn(
+        '[Outbox] Confirmation timed out; preserving submitted hash',
+        {
+          opId: op.id,
+          txHash: err.txHash,
+        }
+      )
+      return { hash: err.txHash, status: 'pending' }
+    }
+
     const { terminal } = await markFailedOrRetry(op, message)
     recordOutboxOp(op.kind, op.priority, terminal ? 'failed' : 'retry')
 
@@ -336,6 +364,45 @@ async function reconcileStuckSubmitted(): Promise<void> {
   updateOutboxStuckSubmitted(stuck.length)
 
   for (const op of stuck) {
+    if (op.txHash) {
+      let chainStatus: 'success' | 'failed' | 'not_found'
+      try {
+        chainStatus = await getTransactionStatus(op.txHash)
+      } catch (err) {
+        logger.warn('[Outbox] Could not reconcile submitted transaction hash', {
+          opId: op.id,
+          txHash: op.txHash,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        continue
+      }
+
+      if (chainStatus === 'success') {
+        await markConfirmed(op.id, op.txHash)
+        await mirrorLinkedTransaction(op.payload, {
+          txHash: op.txHash,
+          status: 'CONFIRMED',
+        })
+        recordOutboxOp(op.kind, op.priority, 'confirmed')
+        continue
+      }
+
+      if (chainStatus === 'failed') {
+        await markFailedTerminal(
+          op.id,
+          op.txHash,
+          'Stellar RPC confirmed the submitted transaction failed'
+        )
+        await mirrorLinkedTransaction(op.payload, {
+          txHash: op.txHash,
+          status: 'FAILED',
+        })
+        recordOutboxOp(op.kind, op.priority, 'failed')
+        await onTerminalFailure(op, 'Submitted Stellar transaction failed')
+        continue
+      }
+    }
+
     if (op.attempts >= config.outbox.feeBumpMaxAttempts) {
       const { terminal } = await markFailedOrRetry(
         { id: op.id, attempts: config.outbox.maxAttempts },

@@ -330,6 +330,22 @@ const bodySizeLimit = parseByteLimit(
 type NodeEnv = 'development' | 'staging' | 'production' | 'test'
 const nodeEnv = process.env.NODE_ENV as NodeEnv
 
+const marketVolatilityCircuitBreaker = {
+  enabled: process.env.MARKET_VOLATILITY_BREAKER_ENABLED !== 'false',
+  thresholdPct: Number(
+    process.env.MARKET_VOLATILITY_BREAKER_THRESHOLD_PCT ?? '75'
+  ),
+}
+
+if (
+  !Number.isFinite(marketVolatilityCircuitBreaker.thresholdPct) ||
+  marketVolatilityCircuitBreaker.thresholdPct <= 0
+) {
+  throw new Error(
+    'MARKET_VOLATILITY_BREAKER_THRESHOLD_PCT must be a finite number greater than 0'
+  )
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3001'),
   nodeEnv,
@@ -622,10 +638,16 @@ export const config = {
   },
   protocolRisk: {
     intervalMs: parseInt(process.env.PROTOCOL_RISK_INTERVAL_MS || '21600000'),
+    // #529 — when true, a ProtocolRiskMetadataEntry past nextReviewDueAt is
+    // auto-downgraded to dataConfidence: UNVERIFIED. Default off (flag-only):
+    // stale entries are surfaced but not silently altered.
+    staleAutoDowngrade:
+      process.env.PROTOCOL_RISK_STALE_AUTO_DOWNGRADE === 'true',
   },
   portfolioRisk: {
     intervalMs: parseInt(process.env.PORTFOLIO_RISK_INTERVAL_MS || '21600000'),
   },
+  marketVolatilityCircuitBreaker,
   alertRules: {
     intervalMs: parseInt(process.env.ALERT_RULES_INTERVAL_MS || '60000'),
   },

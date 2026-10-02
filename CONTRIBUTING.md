@@ -10,6 +10,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 - [Code Standards](#code-standards)
 - [Pull Request Process](#pull-request-process)
 - [Issue Guidelines](#issue-guidelines)
+- [Issue Triage](#issue-triage)
 
 ## Getting Started
 
@@ -158,6 +159,21 @@ Use the **Feature Request** template. Include:
 ### Good First Issues
 
 Look for issues labeled `good first issue` - these are beginner-friendly tasks perfect for first-time contributors.
+
+### Triage Workflow
+
+Open passes with the **Backlog Cleanup** template: enumerate the issues in scope, then close each one out with an explicit outcome — `close`, `relabel`, `split`, or `promote`. Combine it with the **Bug Report**, **Feature Request**, and **Documentation** templates for new intake.
+
+## Issue Triage
+
+Every issue carries exactly one primary type label, plus community and disposition labels as needed:
+
+- **Primary type:** `bug`, `enhancement`, `documentation`, `question`
+- **Community:** `good first issue`, `help wanted`, `GrantFox OSS`, `Maybe Rewarded`, `Official Campaign`, `Stellar Wave`
+- **Disposition:** `duplicate`, `invalid`, `wontfix` — close the issue in the same action so the backlog stays honest
+- **Campaigns:** `Beta-Campaign`, `Official Campaign | FWC26`, `Third Campaign`
+
+When a triage pass (a **Backlog Cleanup** issue) touches a batch of issues, list every item and its outcome in the pass issue so the decision trail stays auditable.
 
 ## Need Help?
 
