@@ -309,6 +309,7 @@ model User {
   linkedExternalWallets   LinkedExternalWallet[]
   emailIdentity           EmailIdentity?
   pushDeviceTokens        PushDeviceToken[]
+  totpCredential          TotpCredential?
 
   @@map("users")
 }
@@ -359,6 +360,33 @@ model PushDeviceToken {
   @@index([token])
   @@index([isActive])
   @@map("push_device_tokens")
+}
+
+/// TOTP-based two-factor authentication credential (additive second factor).
+/// One row per user. `secretEncrypted` is encrypted at rest via the same
+/// wallet-encryption-key pattern as CustodialWallet (src/keys/registry.ts) and
+/// is never re-exposed after enrollment. `verifiedAt` is null until the user
+/// confirms a code from their authenticator app — an unverified row is never
+/// treated as active or enforced. `lastAcceptedStep` tracks the last accepted
+/// TOTP time-step so a code cannot be replayed within its window.
+model TotpCredential {
+  id               String    @id @default(uuid())
+  userId           String    @unique
+  secretEncrypted  String
+  iv               String
+  authTag          String
+  keyVersion       Int       @default(1)
+  encryptionKeyId  String?
+  verifiedAt       DateTime?
+  lastAcceptedStep BigInt?
+  recoveryCodesHashed String[]
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("totp_credentials")
 }
 
 model IdempotencyRecord {
