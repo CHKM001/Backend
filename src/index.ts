@@ -103,6 +103,7 @@ import keysRouter from './routes/keys'
 import sessionsRouter from './routes/sessions'
 import streamRouter from './routes/stream'
 import notificationsRouter from './routes/notifications'
+import notificationDlqRouter from './routes/notification-dlq'
 import networkRouter from './routes/network'
 import netWorthRouter from './routes/net-worth'
 import {
@@ -114,6 +115,7 @@ import {
   validateCorsConfig,
 } from './middleware/corsandbody'
 import { setSpanUser } from './telemetry/spans'
+import { scheduleOutboundNotifications } from './services/outboundNotifications'
 
 // ── Readiness state ───────────────────────────────────────────────────────────
 
@@ -145,6 +147,7 @@ let outboxDispatcherHandle: NodeJS.Timeout | null = null
 let portfolioRiskJobHandle: NodeJS.Timeout | null = null
 let approvalExpiryHandle: NodeJS.Timeout | null = null
 let reserveReconciliationHandle: NodeJS.Timeout | null = null
+let outboundNotificationsHandle: NodeJS.Timeout | null = null
 let linkedExternalWalletSyncHandle: NodeJS.Timeout | null = null
 let loanAccrualHandle: NodeJS.Timeout | null = null
 let loanLiquidationHandle: NodeJS.Timeout | null = null
@@ -371,6 +374,7 @@ const apiRoutes: ApiRoute[] = [
   { path: 'sessions', handlers: [sessionsRouter] },
   { path: 'stream', handlers: [streamRouter] },
   { path: 'notifications', handlers: [notificationsRouter] },
+  { path: 'admin/notifications/dlq', handlers: [adminRateLimiter, notificationDlqRouter] },
   { path: 'admin', handlers: [adminRateLimiter, adminRouter] },
 ]
 
@@ -411,6 +415,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
     clearInterval(sessionCleanupHandle)
     sessionCleanupHandle = null
     logger.info('[Shutdown] Session cleanup timer cleared')
+  }
+
+  if (outboundNotificationsHandle) {
+    clearInterval(outboundNotificationsHandle)
+    outboundNotificationsHandle = null
   }
 
   if (dataRetentionHandle) {
@@ -576,6 +585,11 @@ async function initServices(): Promise<void> {
   // 0. Bootstrap secrets (no-op when SECRET_BACKEND=env, fetches from SSM otherwise)
   const { bootstrapSecrets } = await import('./config/secrets')
   await bootstrapSecrets()
+  const { validateSecretCredentials } = await import('./config/secrets')
+  const secretErrors = validateSecretCredentials()
+  if (secretErrors.length) {
+    throw new Error(`[Startup] Secret validation failed: ${secretErrors.join('; ')}`)
+  }
 
   if (config.nodeEnv === 'production') {
     logger.info(
@@ -727,6 +741,7 @@ async function main(): Promise<void> {
   portfolioRiskJobHandle = schedulePortfolioRiskJob()
   approvalExpiryHandle = scheduleApprovalExpiry()
   reserveReconciliationHandle = scheduleReserveReconciliation()
+  outboundNotificationsHandle = scheduleOutboundNotifications()
   linkedExternalWalletSyncHandle = scheduleLinkedExternalWalletSync()
   // #532 — accrual first, then the monitor: the monitor values loans, and it
   // must not value them on interest the accrual job has not yet recorded.
