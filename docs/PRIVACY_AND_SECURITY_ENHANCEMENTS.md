@@ -844,5 +844,5 @@ npx prisma migrate deploy
 
 - [GDPR Article 17 - Right to Erasure](https://gdpr-info.eu/art-17-gdpr/)
 - [NIST SP 800-63B - Digital Identity Guidelines](https://pages.nist.gov/800-63-3/sp800-63b.html)
-- [OWASP API Security Top 10](https://owasp.org/www-project-api-security/)
+- [OWASP API Security Top 10](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
 - [Referral Program Documentation](./REFERRAL_PROGRAM.md)
