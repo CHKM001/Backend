@@ -1,12 +1,11 @@
 -- DropIndex
-DROP INDEX "referral_conversions_manualReviewRequired_idx";
+DROP INDEX IF EXISTS "referral_conversions_manualReviewRequired_idx";
 
 -- Remove fraud detection fields from referral_conversions
-ALTER TABLE "referral_conversions" DROP COLUMN "fraudCheckScore";
-ALTER TABLE "referral_conversions" DROP COLUMN "fraudCheckFlags";
-ALTER TABLE "referral_conversions" DROP COLUMN "fraudCheckDetails";
-ALTER TABLE "referral_conversions" DROP COLUMN "manualReviewRequired";
-ALTER TABLE "referral_conversions" DROP COLUMN "manualReviewRejected";
-ALTER TABLE "referral_conversions" DROP COLUMN "reviewedBy";
-ALTER TABLE "referral_conversions" DROP COLUMN "reviewedAt";
-ALTER TABLE "referral_conversions" DROP COLUMN "rejectionReason";
+-- Note: reviewedBy and reviewedAt are NOT dropped as they were added by migration 20260830163707_add_referral_fraud_review
+ALTER TABLE "referral_conversions" DROP COLUMN IF EXISTS "fraudCheckScore";
+ALTER TABLE "referral_conversions" DROP COLUMN IF EXISTS "fraudCheckFlags";
+ALTER TABLE "referral_conversions" DROP COLUMN IF EXISTS "fraudCheckDetails";
+ALTER TABLE "referral_conversions" DROP COLUMN IF EXISTS "manualReviewRequired";
+ALTER TABLE "referral_conversions" DROP COLUMN IF EXISTS "manualReviewRejected";
+ALTER TABLE "referral_conversions" DROP COLUMN IF EXISTS "rejectionReason";
