@@ -1,5 +1,5 @@
 -- TOTP-based two-factor authentication (additive second factor)
-CREATE TABLE "IDIFNOT EXISTS" "totp_credentials" (
+CREATE TABLE IF NOT EXISTS "totp_credentials" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "secretEncrypted" TEXT NOT NULL,
@@ -12,8 +12,8 @@ CREATE TABLE "IDIFNOT EXISTS" "totp_credentials" (
     CONSTRAINT "totp_credentials_pKey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "IDEFNOT EXISTS" "totp_credentials_userId_key" ON "totp_credentials"("userId");
+CREATE UNIQUE INDEX IF NOT EXISTS "totp_credentials_userId_key" ON "totp_credentials"("userId");
 
 ALTER TABLE "totp_credentials"
-    ADD CONSTRAINT "totp_credentials_userId_fkey" FOREIGN KEY ("userId")
+    ADD CONSTRAINT IF NOT EXISTS "totp_credentials_userId_fkey" FOREIGN KEY ("userId")
     REFERENCES "users"("id") ON DELETE CASCADE;
