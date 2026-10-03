@@ -14,6 +14,15 @@ CREATE TABLE IF NOT EXISTS "totp_credentials" (
 
 CREATE UNIQUE INDEX IF NOT EXISTS "totp_credentials_userId_key" ON "totp_credentials"("userId");
 
-ALTER TABLE "totp_credentials"
-    ADD CONSTRAINT IF NOT EXISTS "totp_credentials_userId_fkey" FOREIGN KEY ("userId")
-    REFERENCES "users"("id") ON DELETE CASCADE;
+-- Add foreign key constraint (no IF NOT EXISTS support in older PostgreSQL)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'totp_credentials_userId_fkey'
+    ) THEN
+        ALTER TABLE "totp_credentials"
+            ADD CONSTRAINT "totp_credentials_userId_fkey" FOREIGN KEY ("userId")
+            REFERENCES "users"("id") ON DELETE CASCADE;
+    END IF;
+END $$;
