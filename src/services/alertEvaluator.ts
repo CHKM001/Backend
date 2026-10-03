@@ -9,8 +9,59 @@
  */
 
 export type AlertMetric =
-  'PROTOCOL_APY' | 'PORTFOLIO_VALUE' | 'POSITION_DRAWDOWN'
+  | 'PROTOCOL_APY'
+  | 'PORTFOLIO_VALUE'
+  | 'POSITION_DRAWDOWN'
+  | 'DRIFT'
+  | 'VOLATILITY_REGIME'
+  | 'ANOMALY'
 export type Comparator = 'LT' | 'LTE' | 'GT' | 'GTE'
+export type AlertOperator = 'AND' | 'OR' | 'NOT' | 'CONDITION'
+
+export interface ConditionLeafNode {
+  operator: 'CONDITION'
+  metric: AlertMetric
+  comparator: Comparator
+  threshold: number
+  windowMinutes?: number
+  modelVersion?: string
+}
+
+export interface CompositeConditionNode {
+  operator: 'AND' | 'OR' | 'NOT'
+  children: ReadonlyArray<AlertConditionNode>
+  windowMinutes?: number
+  modelVersion?: string
+}
+
+export type AlertConditionNode = ConditionLeafNode | CompositeConditionNode
+
+export interface EvaluationTrace {
+  matched: boolean
+  partialData: boolean
+  branch?: string
+  children?: EvaluationTrace[]
+  metric?: AlertMetric
+  comparator?: Comparator
+  threshold?: number
+  observedValue?: number
+}
+
+export function normalizeLegacyCondition(
+  metric: AlertMetric,
+  comparator: Comparator,
+  threshold: number,
+  windowMinutes?: number
+): ConditionLeafNode {
+  return {
+    operator: 'CONDITION',
+    metric,
+    comparator,
+    threshold,
+    windowMinutes,
+    modelVersion: 'alert-v1',
+  }
+}
 
 /**
  * Evaluate a comparator against an observed value and threshold.
@@ -105,6 +156,88 @@ export interface EvaluationResult {
   conditionMet: boolean
   /** The rule is eligible to fire now (condition met AND cooldown elapsed). */
   shouldFire: boolean
+}
+
+export function evaluateConditionNode(
+  node: AlertConditionNode,
+  valuesByMetric: Partial<Record<AlertMetric, number>>
+): EvaluationTrace {
+  if (node.operator === 'CONDITION') {
+    const observedValue = valuesByMetric[node.metric]
+    if (
+      observedValue === undefined ||
+      observedValue === null ||
+      Number.isNaN(observedValue)
+    ) {
+      return {
+        matched: false,
+        partialData: true,
+        metric: node.metric,
+        comparator: node.comparator,
+        threshold: node.threshold,
+        observedValue: undefined,
+      }
+    }
+
+    const matched = compare(node.comparator, observedValue, node.threshold)
+    return {
+      matched,
+      partialData: false,
+      metric: node.metric,
+      comparator: node.comparator,
+      threshold: node.threshold,
+      observedValue,
+    }
+  }
+
+  if (node.operator === 'NOT') {
+    const child = node.children[0]
+    if (!child) {
+      return { matched: false, partialData: true, branch: 'NOT' }
+    }
+
+    const evaluated = evaluateConditionNode(child, valuesByMetric)
+    if (evaluated.partialData) {
+      return {
+        matched: false,
+        partialData: true,
+        branch: 'NOT',
+        children: [evaluated],
+      }
+    }
+
+    return {
+      matched: !evaluated.matched,
+      partialData: false,
+      branch: 'NOT',
+      children: [evaluated],
+    }
+  }
+
+  const childResults = node.children.map((child) =>
+    evaluateConditionNode(child, valuesByMetric)
+  )
+
+  if (node.operator === 'AND') {
+    const partialData = childResults.some((result) => result.partialData)
+    const matched =
+      childResults.every((result) => result.matched) && !partialData
+    return {
+      matched,
+      partialData,
+      branch: 'AND',
+      children: childResults,
+    }
+  }
+
+  const partialData = childResults.some((result) => result.partialData)
+  const matched = childResults.some((result) => result.matched)
+  return {
+    matched,
+    partialData,
+    branch: 'OR',
+    children: childResults,
+  }
 }
 
 /**

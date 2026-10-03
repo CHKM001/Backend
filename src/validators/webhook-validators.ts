@@ -45,6 +45,14 @@ const WEBHOOK_EVENTS = [
   // Durable outbox (#325): a money-moving op exhausted its retries and moved
   // to the terminal FAILED state — see docs/OUTBOX.md.
   'outbox.op_failed',
+  // Approval workflows (#314): lifecycle of a PENDING_APPROVAL high-value
+  // operation gated by an ApprovalPolicy — see docs/APPROVALS.md.
+  'approval.requested',
+  'approval.approved',
+  'approval.rejected',
+  'approval.executed',
+  'approval.expired',
+  'approval.cancelled',
 ] as const
 
 export const createWebhookSchema = z.object({
@@ -62,6 +70,32 @@ export const updateWebhookSchema = z.object({
 
 export const webhookIdParamSchema = z.object({
   id: z.string().uuid('Invalid webhook ID'),
+})
+
+export const createUserWebhookEndpointSchema = z.object({
+  url: z.string().url('Must be a valid URL'),
+  events: z
+    .array(z.enum(WEBHOOK_EVENTS))
+    .min(1, 'At least one event is required'),
+  topicScope: z.array(z.string()).optional(),
+  // zod v4 requires explicit key and value schemas for records.
+  filterJson: z.record(z.string(), z.any()).nullable().optional(),
+})
+
+export const updateUserWebhookEndpointSchema = z.object({
+  url: z.string().url('Must be a valid URL').optional(),
+  events: z
+    .array(z.enum(WEBHOOK_EVENTS))
+    .min(1, 'At least one event is required')
+    .optional(),
+  topicScope: z.array(z.string()).optional(),
+  // zod v4 requires explicit key and value schemas for records.
+  filterJson: z.record(z.string(), z.any()).nullable().optional(),
+  status: z.enum(['ACTIVE', 'PAUSED', 'DISABLED']).optional(),
+})
+
+export const userWebhookEndpointIdParamSchema = z.object({
+  id: z.string().uuid('Invalid endpoint ID'),
 })
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number]

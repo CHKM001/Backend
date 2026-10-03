@@ -39,6 +39,72 @@
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 12, "w": 24, "h": 6 },
       "targets": [{ "expr": "histogram_quantile(0.95, rate(analytics_request_duration_seconds_bucket[5m]))", "legendFormat": "{{endpoint}}" }]
+    },
+    {
+      "id": 6,
+      "title": "Fee Oracle Recommended Base Fee (stroops)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 18, "w": 12, "h": 6 },
+      "targets": [{ "expr": "fee_oracle_recommended_base_fee", "legendFormat": "recommended" }, { "expr": "fee_oracle_aggressive_base_fee", "legendFormat": "aggressive" }]
+    },
+    {
+      "id": 7,
+      "title": "Ledger Capacity Usage",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 18, "w": 12, "h": 6 },
+      "targets": [{ "expr": "fee_oracle_ledger_capacity_usage", "legendFormat": "capacity" }, { "expr": "fee_oracle_congestion_level", "legendFormat": "congestion" }]
+    },
+    {
+      "id": 8,
+      "title": "Fee Oracle Staleness (s)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 6 },
+      "targets": [{ "expr": "fee_oracle_staleness_seconds", "legendFormat": "staleness" }]
+    },
+    {
+      "id": 9,
+      "title": "Outbox Deferrals & Fee Events",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "rate(outbox_low_deferred_total[5m])", "legendFormat": "low_deferred" },
+        { "expr": "rate(outbox_aggressive_fee_used_total[5m])", "legendFormat": "aggressive" },
+        { "expr": "rate(outbox_max_fee_hit_total[5m])", "legendFormat": "max_fee_hit {{priority}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "HTTP P99 Latency (s)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 30, "w": 12, "h": 6 },
+      "targets": [{ "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))", "legendFormat": "p99" }]
+    },
+    {
+      "id": 11,
+      "title": "Database P99 Latency (s)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 30, "w": 12, "h": 6 },
+      "targets": [{ "expr": "histogram_quantile(0.99, sum by (le, operation) (rate(db_operation_duration_seconds_bucket[5m])))", "legendFormat": "{{operation}}" }]
+    },
+    {
+      "id": 12,
+      "title": "Stellar RPC P95 / P99 Latency (s)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 36, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(stellar_rpc_request_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{endpoint}}" },
+        { "expr": "histogram_quantile(0.99, sum by (le, endpoint) (rate(stellar_rpc_request_duration_seconds_bucket[5m])))", "legendFormat": "p99 {{endpoint}}" }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Queue and Notification Failures",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 36, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "outbound_notification_dlq_size", "legendFormat": "notification_dlq" },
+        { "expr": "sum by (channel, status) (rate(outbound_notification_attempts_total[5m]))", "legendFormat": "{{channel}} {{status}}" }
+      ]
     }
   ]
 }

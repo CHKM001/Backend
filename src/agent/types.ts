@@ -10,6 +10,16 @@ export interface YieldProtocol {
   lastUpdated: Date
   isAvailable: boolean
   errorMessage?: string
+  /** #349: base (market) rate, optional split of `apy`. */
+  baseApy?: number
+  /** #349: incentive (token-reward) rate, optional split of `apy`. */
+  incentiveApy?: number
+  /** #349: reward-token metadata (symbol, address, apy). */
+  rewardTokens?: Array<{
+    symbol: string
+    address?: string
+    apy?: number
+  }>
 }
 
 export interface ProtocolComparison {
@@ -17,6 +27,13 @@ export interface ProtocolComparison {
   best: YieldProtocol
   improvement: number // percentage points
   shouldRebalance: boolean
+  /**
+   * #343 — full input set backing this comparison: ranked candidates with
+   * per-candidate rejection reasons, the cost breakdown and the thresholds in
+   * effect. Computed in compareProtocols and consumed by the decision ledger
+   * (executeRebalanceIfNeeded) so a decision is durable, not log-only.
+   */
+  trace?: DecisionTrace
 }
 
 export interface RebalanceDetails {
@@ -27,6 +44,10 @@ export interface RebalanceDetails {
   txHash?: string
   timestamp: Date
   improvedBy: number // percentage points
+  /** #343 — durable outbox op id when one was enqueued for this move. */
+  outboxOpId?: string
+  /** #343 — id of the persisted RebalanceDecision row, when recorded. */
+  decisionId?: string
 }
 
 export interface UserBalance {
@@ -74,6 +95,38 @@ export interface RebalanceThresholds {
   maxGasPercent: number // 0.1% default
 }
 
+/**
+ * One ranked protocol candidate in a rebalance decision (#343). `eligible`
+ * records whether the candidate passed the risk ceiling (fail-closed on an
+ * absent risk score); `rejectionReason` is null for the chosen protocol and
+ * explains why each non-winner lost.
+ */
+export interface RankedCandidate {
+  protocol: string
+  apy: number | null
+  riskScore: number | null
+  eligible: boolean
+  rejectionReason?: string | null
+}
+
+/**
+ * The full decision-input trace captured for the rationale ledger (#343).
+ * Pure data produced by the strategy engine / compareProtocols; persisted
+ * verbatim on the RebalanceDecision row.
+ */
+export interface DecisionTrace {
+  currentApy: number | null
+  chosenProtocol: string | null
+  chosenApy: number | null
+  rawImprovement: number | null
+  netImprovement: number | null
+  estCostPercent: number | null
+  /** Grounded #347 cost breakdown, when the path produced one. */
+  costBreakdown?: Record<string, unknown> | null
+  thresholds: RebalanceThresholds
+  candidates: RankedCandidate[]
+}
+
 export type StrategyName = 'MAX_YIELD' | 'TARGET_ALLOCATION' | 'GOAL_TRACKING'
 
 export interface StrategyDecision {
@@ -82,6 +135,24 @@ export interface StrategyDecision {
   reasoning: string
   deviationTrigger?: string
   details?: Record<string, unknown>
+  /**
+   * #343 — the ranked candidate list this strategy evaluated, with per-candidate
+   * rejection reasons. Consumed by the decision ledger; absent for backward
+   * compatibility with strategies/callers that predate the rationale ledger.
+   */
+  candidates?: RankedCandidate[]
+  /**
+   * #343 — optional structured rationale this decision carries. When present it
+   * is persisted verbatim on the RebalanceDecision row (server-templated, never
+   * free-form user text).
+   */
+  rationale?: string
+  /**
+   * #343 — outcome classification for a non-rebalance decision. Absent/undefined
+   * on a REBALANCED decision; on a hold the caller maps a value here to the
+   * RebalanceDecision.outcome (HELD) or BLOCKED + blockedReason.
+   */
+  blockedReason?: string
 }
 
 export interface StrategyParams {
@@ -117,6 +188,26 @@ export interface StrategyParams {
     startingAmount: number
     targetDate: Date
   }
+  /**
+   * Exposure context (#346): the user's whole-portfolio per-protocol split and
+   * the caps in effect. Optional for backward compatibility — strategies with no
+   * exposure awareness see nothing and behave as before.
+   */
+  exposure?: ExposureContext
+  /**
+   * Live network fee-oracle snapshot (#347). Null/absent means the cost model
+   * falls back to conservative constants and lowers its confidence. Mirrors the
+   * rebalanceCost.FeeSnapshot shape without importing it (avoids a type cycle).
+   */
+  feeSnapshot?: {
+    recommendedBaseFee: number
+    congestionLevel?: 'low' | 'medium' | 'high'
+    fetchedAt?: Date | null
+  } | null
+  /**
+   * Per-protocol entry+exit cost in bps (#347), used by the cost model.
+   */
+  protocolEntryExitBps?: Record<string, number>
 }
 
 export interface RebalanceStrategy {
@@ -143,4 +234,40 @@ export interface UserStrategyPreferences {
    * overwhelming majority of users, who follow nothing.
    */
   followedStrategyId?: string | null
+  /**
+   * Per-protocol exposure cap overrides (#346), from strategyConfig.exposureCaps.
+   * Each value is { maxFraction?, maxAbsolute? }. Absent for users who never
+   * configured caps.
+   */
+  exposureCaps?: Record<string, { maxFraction?: number; maxAbsolute?: string }>
+  /**
+   * Per-user default max single-protocol fraction (#346), from
+   * strategyConfig.defaultMaxFraction. Takes precedence over the risk-tolerance
+   * table but yields to a per-protocol override.
+   */
+  defaultMaxFraction?: number
+}
+
+/**
+ * Per-protocol exposure context handed to a strategy (#346). Describes how the
+ * user's whole ACTIVE portfolio is currently split and the caps in effect, so a
+ * strategy can (a) prefer targets with headroom under cap and (b) surface
+ * capConstraints in its decision. Pure data produced by the rebalancer from the
+ * caller's own positions.
+ */
+export interface ExposureContext {
+  /** Current fraction of the portfolio in each protocol. */
+  fractions: Record<string, number>
+  /**
+   * Effective cap per protocol: { maxFraction, maxAbsolute?, source }.
+   * Only present for protocols that have a cap supplied by the caller.
+   */
+  caps: Record<
+    string,
+    { maxFraction: number; maxAbsolute?: string; source: string }
+  >
+  /** Protocol names with a current fraction above their effective cap. */
+  overCap: string[]
+  /** True when the sum of caps over the eligible set < 1 (unplaceable). */
+  unplaceable: boolean
 }

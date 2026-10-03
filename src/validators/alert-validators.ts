@@ -12,9 +12,13 @@ export const ALERT_METRICS = [
   'PROTOCOL_APY',
   'PORTFOLIO_VALUE',
   'POSITION_DRAWDOWN',
+  'DRIFT',
+  'VOLATILITY_REGIME',
+  'ANOMALY',
 ] as const
 
 export const COMPARATORS = ['LT', 'LTE', 'GT', 'GTE'] as const
+export const ALERT_OPERATORS = ['AND', 'OR', 'NOT', 'CONDITION'] as const
 
 export const DELIVERY_CHANNELS = ['WEBHOOK', 'WHATSAPP', 'BOTH'] as const
 
@@ -29,6 +33,8 @@ const baseAlertRuleShape = {
   threshold: z.number().finite(),
   deliveryChannel: z.enum(DELIVERY_CHANNELS),
   cooldownMinutes: z.number().int().min(1).max(10080).default(60),
+  windowMinutes: z.number().int().positive().optional(),
+  modelVersion: z.string().trim().min(1).max(50).optional(),
 }
 
 /**
@@ -54,6 +60,38 @@ function requireProtocolNameForApy<
     })
   }
 }
+
+const alertConditionNodeSchema: z.ZodTypeAny = z.lazy(() =>
+  z.union([
+    z.object({
+      operator: z.literal('CONDITION'),
+      metric: z.enum(ALERT_METRICS),
+      comparator: z.enum(COMPARATORS),
+      threshold: z.number().finite(),
+      windowMinutes: z.number().int().positive().optional(),
+      modelVersion: z.string().trim().min(1).max(50).optional(),
+    }),
+    z.object({
+      operator: z.enum(['AND', 'OR']),
+      children: z.array(alertConditionNodeSchema).min(2).max(10),
+      windowMinutes: z.number().int().positive().optional(),
+      modelVersion: z.string().trim().min(1).max(50).optional(),
+    }),
+    z.object({
+      operator: z.literal('NOT'),
+      children: z.array(alertConditionNodeSchema).length(1),
+      windowMinutes: z.number().int().positive().optional(),
+      modelVersion: z.string().trim().min(1).max(50).optional(),
+    }),
+  ])
+)
+
+export const compositeAlertRuleSchema = z.object({
+  root: alertConditionNodeSchema,
+  deliveryChannel: z.enum(DELIVERY_CHANNELS),
+  cooldownMinutes: z.number().int().min(1).max(10080).default(60),
+  modelVersion: z.string().trim().min(1).max(50).optional(),
+})
 
 export const createAlertRuleSchema = z
   .object(baseAlertRuleShape)

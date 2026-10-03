@@ -21,8 +21,14 @@
 import { logger } from '../utils/logger'
 import { config } from '../config/env'
 import { alertingService } from '../services/alerting'
-import { dispatchWebhookEvent } from '../services/webhookDispatcher'
-import { TransactionResult } from '../stellar/types'
+import db from '../db'
+import { publishUserEvent } from '../events/publisher'
+import { EVENT_TYPE_TOPIC } from '../events/types'
+import {
+  TransactionConfirmationTimeoutError,
+  TransactionResult,
+} from '../stellar/types'
+import { getTransactionStatus } from '../stellar/client'
 import { getSignerLock } from './signerLock'
 import { resolveSignerPublicKey, executeOutboxPayload } from './executors'
 import { sortForDispatch } from './stateMachine'
@@ -38,6 +44,8 @@ import {
   markFailedOrRetry,
   markFailedTerminal,
   mirrorLinkedTransaction,
+  mirrorPendingTransaction,
+  recordSubmittedTxHash,
   returnStuckOpToPending,
 } from './service'
 import {
@@ -46,7 +54,14 @@ import {
   recordOutboxLatency,
   updateOutboxQueueDepth,
   updateOutboxStuckSubmitted,
+  recordOutboxLowDeferred,
+  recordOutboxAggressiveFeeUsed,
+  recordOutboxMaxFeeHit,
 } from '../utils/metrics'
+import {
+  getFeeSnapshot,
+  isStale as isFeeSnapshotStale,
+} from '../stellar/feeOracle'
 
 function signerLock() {
   return getSignerLock(
@@ -66,6 +81,37 @@ function computeFeeMultiplier(attempts: number): number {
     config.outbox.feeBumpMaxAttempts
   )
   return config.outbox.feeBumpMultiplier ** bumps
+}
+
+const CONGESTION_ORDER: Record<string, number> = {
+  low: 0,
+  elevated: 1,
+  high: 2,
+  severe: 3,
+}
+
+function shouldDeferLowOp(op: OutboxOpRecord, congestion: string): boolean {
+  if (op.priority !== 'LOW') return false
+  if ((CONGESTION_ORDER[congestion] ?? 0) < CONGESTION_ORDER['high'])
+    return false
+  const ageMs = Date.now() - new Date(op.createdAt).getTime()
+  if (ageMs > config.outbox.lowMaxDeferMs) return false
+  return true
+}
+
+function getBaseFeeForOp(op: OutboxOpRecord): {
+  baseFee: number
+  isAggressive: boolean
+} {
+  const snapshot = getFeeSnapshot()
+  const level = snapshot.congestionLevel
+  if (
+    op.priority === 'CRITICAL' &&
+    (CONGESTION_ORDER[level] ?? 0) >= CONGESTION_ORDER['elevated']
+  ) {
+    return { baseFee: snapshot.aggressiveBaseFee, isAggressive: true }
+  }
+  return { baseFee: snapshot.recommendedBaseFee, isAggressive: false }
 }
 
 async function onTerminalFailure(
@@ -92,13 +138,18 @@ async function onTerminalFailure(
       logger.error('[Outbox] Failed to emit terminal-failure alert', { err })
     )
 
-  await dispatchWebhookEvent('outbox.op_failed', {
-    opId: op.id,
-    kind: op.kind,
-    userId: op.userId,
-    attempts: op.attempts,
-    error: errorMessage,
-  }).catch(() => {})
+  await publishUserEvent(
+    op.userId,
+    EVENT_TYPE_TOPIC['outbox.op_failed'],
+    'outbox.op_failed',
+    {
+      opId: op.id,
+      kind: op.kind,
+      userId: op.userId,
+      attempts: op.attempts,
+      error: errorMessage,
+    }
+  ).catch(() => {})
 }
 
 /**
@@ -112,15 +163,49 @@ async function onTerminalFailure(
  * caller's existing error handling is unaffected by the outbox underneath it.
  */
 async function submitClaimedOp(op: OutboxOpRecord): Promise<TransactionResult> {
-  const feeMultiplier = computeFeeMultiplier(op.attempts)
+  const { baseFee, isAggressive } = getBaseFeeForOp(op)
+  if (isAggressive) recordOutboxAggressiveFeeUsed()
+
+  const attemptMultiplier = computeFeeMultiplier(op.attempts)
+  const rawFee = baseFee * attemptMultiplier
+  const effectiveFee = Math.min(rawFee, config.outbox.maxAbsFee)
+  const hitCap = rawFee > config.outbox.maxAbsFee
+  if (hitCap) {
+    recordOutboxMaxFeeHit(op.priority)
+    if (op.priority === 'CRITICAL') {
+      await alertingService
+        .emit(
+          {
+            title: 'Outbox fee cap hit on CRITICAL op',
+            description: `CRITICAL op ${op.id} hit OUTBOX_MAX_ABS_FEE ${config.outbox.maxAbsFee} stroops (raw ${rawFee}). Submitting at cap.`,
+            severity: 'critical',
+            component: 'outbox',
+            metadata: { opId: op.id, rawFee, cap: config.outbox.maxAbsFee },
+          },
+          'outbox:max-fee-hit'
+        )
+        .catch(() => {})
+    }
+  }
+  // Contract expects multiplier relative to BASE_FEE (100 stroops)
+  const feeMultiplier = Math.max(1, Math.round(effectiveFee / 100))
   const lock = signerLock()
 
   try {
     const result = await lock.withLock(op.signerPublicKey!, () =>
-      executeOutboxPayload(op.payload, feeMultiplier)
+      executeOutboxPayload(op.payload, feeMultiplier, (txHash) =>
+        recordSubmittedTxHash(op.id, txHash)
+      )
     )
 
-    if (!result.status || result.status === 'success') {
+    if (result.status === 'pending') {
+      await recordSubmittedTxHash(op.id, result.hash)
+      await mirrorPendingTransaction(op.payload, result.hash)
+      logger.warn('[Outbox] Confirmation pending; preserving submitted hash', {
+        opId: op.id,
+        txHash: result.hash,
+      })
+    } else if (!result.status || result.status === 'success') {
       await markConfirmed(op.id, result.hash)
       await mirrorLinkedTransaction(op.payload, {
         txHash: result.hash,
@@ -156,6 +241,19 @@ async function submitClaimedOp(op: OutboxOpRecord): Promise<TransactionResult> {
     return result
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof TransactionConfirmationTimeoutError) {
+      await recordSubmittedTxHash(op.id, err.txHash)
+      await mirrorPendingTransaction(op.payload, err.txHash)
+      logger.warn(
+        '[Outbox] Confirmation timed out; preserving submitted hash',
+        {
+          opId: op.id,
+          txHash: err.txHash,
+        }
+      )
+      return { hash: err.txHash, status: 'pending' }
+    }
+
     const { terminal } = await markFailedOrRetry(op, message)
     recordOutboxOp(op.kind, op.priority, terminal ? 'failed' : 'retry')
 
@@ -202,6 +300,33 @@ export async function dispatchOne(opId: string): Promise<TransactionResult> {
     )
   }
 
+  // LOW deferral during high/severe congestion (bounded)
+  try {
+    const snap = getFeeSnapshot()
+    if (shouldDeferLowOp(op, snap.congestionLevel)) {
+      const deferUntil = new Date(Date.now() + config.outbox.lowDeferMs)
+      await db.outboxOp.update({
+        where: { id: op.id },
+        data: { nextAttemptAt: deferUntil },
+      })
+      recordOutboxLowDeferred()
+      throw new Error(
+        `LOW op ${opId} deferred due to high congestion (${snap.congestionLevel})`
+      )
+    }
+  } catch (err) {
+    // If the error is our deferral throw, rethrow; otherwise log and proceed
+    if (
+      err instanceof Error &&
+      err.message.includes('deferred due to high congestion')
+    )
+      throw err
+    logger.warn('[Outbox] Defer check failed, proceeding to dispatch', {
+      opId: op.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   const signerPublicKey = await resolveSignerPublicKey(op.payload, op.userId)
   const claimed = await claimOp(opId, signerPublicKey)
   if (!claimed) {
@@ -239,6 +364,45 @@ async function reconcileStuckSubmitted(): Promise<void> {
   updateOutboxStuckSubmitted(stuck.length)
 
   for (const op of stuck) {
+    if (op.txHash) {
+      let chainStatus: 'success' | 'failed' | 'not_found'
+      try {
+        chainStatus = await getTransactionStatus(op.txHash)
+      } catch (err) {
+        logger.warn('[Outbox] Could not reconcile submitted transaction hash', {
+          opId: op.id,
+          txHash: op.txHash,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        continue
+      }
+
+      if (chainStatus === 'success') {
+        await markConfirmed(op.id, op.txHash)
+        await mirrorLinkedTransaction(op.payload, {
+          txHash: op.txHash,
+          status: 'CONFIRMED',
+        })
+        recordOutboxOp(op.kind, op.priority, 'confirmed')
+        continue
+      }
+
+      if (chainStatus === 'failed') {
+        await markFailedTerminal(
+          op.id,
+          op.txHash,
+          'Stellar RPC confirmed the submitted transaction failed'
+        )
+        await mirrorLinkedTransaction(op.payload, {
+          txHash: op.txHash,
+          status: 'FAILED',
+        })
+        recordOutboxOp(op.kind, op.priority, 'failed')
+        await onTerminalFailure(op, 'Submitted Stellar transaction failed')
+        continue
+      }
+    }
+
     if (op.attempts >= config.outbox.feeBumpMaxAttempts) {
       const { terminal } = await markFailedOrRetry(
         { id: op.id, attempts: config.outbox.maxAttempts },
@@ -285,6 +449,30 @@ export async function runDispatchSweep(): Promise<void> {
         userId: op.userId,
       })
       continue
+    }
+
+    // LOW deferral during high/severe congestion (bounded)
+    try {
+      const snap = getFeeSnapshot()
+      if (shouldDeferLowOp(op, snap.congestionLevel)) {
+        const deferUntil = new Date(Date.now() + config.outbox.lowDeferMs)
+        await db.outboxOp.update({
+          where: { id: op.id },
+          data: { nextAttemptAt: deferUntil },
+        })
+        recordOutboxLowDeferred()
+        logger.info('[Outbox] LOW op deferred due to high congestion', {
+          opId: op.id,
+          congestion: snap.congestionLevel,
+          deferUntil: deferUntil.toISOString(),
+        })
+        continue
+      }
+    } catch (err) {
+      logger.warn('[Outbox] Defer check failed, proceeding to dispatch', {
+        opId: op.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
 
     let signerPublicKey: string

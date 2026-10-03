@@ -15,15 +15,17 @@ process.env.TWILIO_ACCOUNT_SID = 'AC' + '0'.repeat(32)
 
 import { runAlertRules } from '../../../src/jobs/alertRules'
 import db from '../../../src/db'
-import { dispatchWebhookEvent } from '../../../src/services/webhookDispatcher'
+import { publishUserEvent } from '../../../src/events/publisher'
 import { sendWhatsAppMessage } from '../../../src/utils/twilio-client'
 
 jest.mock('../../../src/db', () => ({
   __esModule: true,
   default: {},
 }))
-jest.mock('../../../src/services/webhookDispatcher', () => ({
-  dispatchWebhookEvent: jest.fn().mockResolvedValue(undefined),
+// #316: alert delivery now goes through the unified publisher, which fans out
+// to the user's real-time stream and (when the rule opts in) the webhook leg.
+jest.mock('../../../src/events/publisher', () => ({
+  publishUserEvent: jest.fn().mockResolvedValue(undefined),
 }))
 jest.mock('../../../src/utils/twilio-client', () => ({
   sendWhatsAppMessage: jest.fn().mockResolvedValue('sid-1'),
@@ -38,7 +40,7 @@ jest.mock('../../../src/utils/job-metrics', () => ({
 }))
 
 const mockDb = db as any
-const mockDispatch = dispatchWebhookEvent as jest.Mock
+const mockPublish = publishUserEvent as jest.Mock
 const mockSendWhatsApp = sendWhatsAppMessage as jest.Mock
 
 /** Build a fresh alertRule mock with sensible default resolved values. */
@@ -87,13 +89,18 @@ describe('runAlertRules', () => {
         data: { lastFiredAt: NOW },
       })
     )
-    expect(mockDispatch).toHaveBeenCalledWith(
+    expect(mockPublish).toHaveBeenCalledWith(
+      'user-1',
+      'alerts',
       'alert_rule.triggered',
       expect.objectContaining({
         ruleId: 'rule-1',
         observedValue: 4,
         threshold: 5,
-      })
+      }),
+      // WEBHOOK/BOTH rules keep the webhook leg; WHATSAPP-only rules publish to
+      // the socket alone.
+      { webhook: true }
     )
   })
 
@@ -116,7 +123,7 @@ describe('runAlertRules', () => {
     await runAlertRules(NOW)
 
     expect(mockDb.alertRule.updateMany).not.toHaveBeenCalled()
-    expect(mockDispatch).not.toHaveBeenCalled()
+    expect(mockPublish).not.toHaveBeenCalled()
   })
 
   it('auto-deactivates a PROTOCOL_APY rule whose protocol has no rate data', async () => {
@@ -138,10 +145,10 @@ describe('runAlertRules', () => {
     await runAlertRules(NOW)
 
     expect(mockDb.alertRule.updateMany).toHaveBeenCalledWith({
-      where: { id: 'rule-1' },
+      where: { id: 'rule-1', deletedAt: null },
       data: { isActive: false },
     })
-    expect(mockDispatch).not.toHaveBeenCalled()
+    expect(mockPublish).not.toHaveBeenCalled()
   })
 
   it('does not deliver when the fire-claim matches 0 rows (deleted/deactivated mid-tick)', async () => {
@@ -164,7 +171,7 @@ describe('runAlertRules', () => {
 
     await runAlertRules(NOW)
 
-    expect(mockDispatch).not.toHaveBeenCalled()
+    expect(mockPublish).not.toHaveBeenCalled()
     expect(mockSendWhatsApp).not.toHaveBeenCalled()
   })
 
@@ -186,7 +193,7 @@ describe('runAlertRules', () => {
 
     await runAlertRules(NOW)
 
-    expect(mockDispatch).toHaveBeenCalledTimes(1)
+    expect(mockPublish).toHaveBeenCalledTimes(1)
     expect(mockSendWhatsApp).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'whatsapp:+15551230000' })
     )
@@ -230,7 +237,7 @@ describe('runAlertRules', () => {
       },
     ])
     mockDb.position.findMany.mockResolvedValue([{ currentValue: 500 }])
-    mockDispatch.mockRejectedValueOnce(new Error('delivery boom'))
+    mockPublish.mockRejectedValueOnce(new Error('delivery boom'))
 
     await runAlertRules(NOW)
 

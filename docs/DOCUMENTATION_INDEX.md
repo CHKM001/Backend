@@ -13,10 +13,23 @@
 - **[PORTFOLIO_OPTIMIZATION.md](PORTFOLIO_OPTIMIZATION.md)** - Portfolio optimization & allocation suggestions: objective, λ mapping, estimation method, advisory invariant, limitations (#322)
 - **[PERFORMANCE_ATTRIBUTION.md](PERFORMANCE_ATTRIBUTION.md)** - Benchmark-relative Brinson attribution: allocation/selection effects, Cariño linking, benchmark definition, `vsBenchmark` on the marketplace (#320)
 - **[OUTBOX.md](OUTBOX.md)** - Durable outbox & prioritized on-chain transaction queue: state machine, idempotency, retry/fee-bump policy, priority ordering, admin API (#325)
+- **[WEBSOCKET_STREAMING.md](WEBSOCKET_STREAMING.md)** - Authenticated real-time WebSocket streaming: handshake auth, topics, seq/resume replay, gap handling, backpressure, sub-account scoping, multi-pod bridge (#316)
+- **[REBALANCE_EXPOSURE_COST.md](REBALANCE_EXPOSURE_COST.md)** - Rebalance exposure caps (#346) and grounded cost model + payback gate (#347): resolution, tighten-only merge, residual routing, conservative-by-default decisions
+- **[CORRELATION_DIVERSIFICATION.md](CORRELATION_DIVERSIFICATION.md)** - Portfolio APY correlation matrix + diversification score (#348): alignment, null-on-degenerate semantics, weighted score, caveat
+- **[YIELD_COMPOSITION.md](YIELD_COMPOSITION.md)** - Yield base/incentive decomposition + effective APY (#349): haircut model, schema columns, flag-gated consumption, emissions risk modifier, yield-breakdown endpoint
+- **[WEBHOOK_SECURITY.md](WEBHOOK_SECURITY.md)** - Inbound fiat webhook HMAC validation, freshness windows, replay receipts, and failure responses
+- **[PRISMA_QUERY_PERFORMANCE.md](PRISMA_QUERY_PERFORMANCE.md)** - Hot webhook query plans, supporting indexes, and the query-index regression check
+- **[NET_WORTH.md](NET_WORTH.md)** - Read-only external Stellar links, valuation/staleness semantics, and private scope
+- **[CONSENT_AND_PRIVACY_POLICY.md](CONSENT_AND_PRIVACY_POLICY.md)** - User consent boundaries, high-risk workflow checks & auditable bypass policy (#510)
 
 ### For DevOps/Deployment
 
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment guide for all environments
+- **[DISASTER_RECOVERY_REHEARSAL.md](DISASTER_RECOVERY_REHEARSAL.md)** - Disaster recovery rehearsal checklist, backup scope, retention policy & restore validation (#511)
+- **[JOB_TRIAGE_RUNBOOK.md](JOB_TRIAGE_RUNBOOK.md)** - Operational triage path for failed jobs, retries & DLQ volume buildup (#509)
+- **[MIGRATIONS.md](MIGRATIONS.md)** - Schema change process (#470): change classification A–D, backup and downtime impact assessment, validation steps, rollback rehearsal, three rollback tiers, PR checklist
+- **[RUNBOOK.md](RUNBOOK.md)** - Production incident runbook, incl. §6 database migration rollback
+- **[DEPENDENCY_AUDIT.md](DEPENDENCY_AUDIT.md)** - Dependency inventory, security advisories, upgrade backlog and exceptions
 - **[IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md)** - Verification checklist
 
 ### For Reference

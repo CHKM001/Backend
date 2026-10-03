@@ -14,14 +14,24 @@ import {
   getThresholds,
   logAgentAction,
 } from './router'
-import { dispatchWebhookEvent } from '../services/webhookDispatcher'
+import { publishUserEvent } from '../events/publisher'
+import { EVENT_TYPE_TOPIC } from '../events/types'
 import { captureAllUserBalances, cleanupOldSnapshots } from './snapshotter'
+import {
+  evaluateBreakerTick,
+  emitBreakerEvalFailureAlert,
+  getBreakerStatusSummary,
+  type BreakerBlockContext,
+} from './breakerService'
+import { persistRebalanceDecision } from './rebalanceDecision'
+import type { DecisionTrace } from './types'
 import { resolveEffectiveConfig } from './effectiveStrategy'
 import {
   loadActiveFollowsForUsers,
   type ActiveFollowConfig,
 } from '../strategy/service'
 import type { StrategyName } from './types'
+import { isPortfolioRebalanceAllowed } from './volatilityCircuitBreaker'
 import db from '../db'
 import {
   updateAgentHeartbeat as metricsUpdateAgentHeartbeat,
@@ -61,6 +71,7 @@ export function getAgentStatus() {
     lastError,
     healthStatus: determineHealthStatus(),
     lastTickAt,
+    breakers: getBreakerStatusSummary(),
   }
 }
 
@@ -126,6 +137,29 @@ async function rebalanceCheckJob(): Promise<void> {
       )
       const followsByUser = await loadActiveFollowsForUsers(userIds)
 
+      const volatilityAllowedByUser = new Map<string, boolean>()
+      for (const userId of userIds) {
+        volatilityAllowedByUser.set(
+          userId,
+          await isPortfolioRebalanceAllowed(userId)
+        )
+      }
+
+      // Load active goals for all users in one query (#446). Returns empty when
+      // no users have active goals.
+      const goalsByUser = new Map<string, boolean>()
+      const userGoals = await db.savingsGoal.findMany({
+        where: {
+          userId: { in: userIds },
+          status: 'ACTIVE',
+          includeExternalHoldings: false,
+        },
+        select: { userId: true },
+      })
+      for (const goal of userGoals as Array<{ userId: string }>) {
+        goalsByUser.set(goal.userId, true)
+      }
+
       // Resolve each user's effective config once. With no follow this is the
       // user's own values read exactly as they were before #285 — the raw
       // strategyConfig fields, uncoerced — so the no-follow path stays a
@@ -146,6 +180,8 @@ async function rebalanceCheckJob(): Promise<void> {
           targetAllocations:
             user.strategyConfig?.targetAllocations || undefined,
           riskCeiling: user.strategyConfig?.riskCeiling,
+          exposureCaps: user.strategyConfig?.exposureCaps,
+          defaultMaxFraction: user.strategyConfig?.defaultMaxFraction,
         }
         const follow = followsByUser.get(pos.userId)
         effectiveByUser.set(pos.userId, {
@@ -154,33 +190,34 @@ async function rebalanceCheckJob(): Promise<void> {
         })
       }
 
-      // Group by (protocol, effective strategy, follow) so users with different
-      // strategies are evaluated independently.
+      // Group by (protocol, strategy, riskCeiling, followId, hasActiveGoal) so
+      // users with different risk ceilings, follows, or active goals are
+      // evaluated independently. Prevents router.ts from applying user[0]'s
+      // settings to the entire batch (#446).
       //
-      // HAZARD: router.ts reads only userStrategyPreferences[0]. Without the
-      // follow component in this key, two followers of DIFFERENT published
-      // strategies sharing a protocol would collapse into one batch and both be
-      // rebalanced on index 0's config — including index 0's risk ceiling.
       // Keying on the per-user follow id (not the followed strategy id) is
       // deliberate: two followers of the SAME strategy can still have different
       // effective ceilings, because a follow clamps to the stricter of publisher
       // and follower. It costs some batching; it buys risk correctness.
       //
-      // For users without a follow the component is the constant 'none', so
-      // grouping is identical to before this feature.
+      // For users without a follow the component is the constant 'none'; without
+      // an active goal it is 'false', so grouping is unchanged for the no-follow,
+      // no-goal path.
       const byProtocolAndStrategy = new Map<
         string,
-        { protocol: string; positions: PositionWithUser[] }
+        { protocol: string; positions: PositionWithUser[]; batchKey: string }
       >()
       for (const pos of positions) {
         const { config, follow } = effectiveByUser.get(pos.userId)!
+        const hasGoal = goalsByUser.has(pos.userId)
         const key = `${pos.protocolName}:${config.strategyName || 'DEFAULT'}:${
-          follow?.followId ?? 'none'
-        }`
+          config.riskCeiling ?? 'none'
+        }:${follow?.followId ?? 'none'}:${hasGoal ? 'goal' : 'nogoal'}`
         if (!byProtocolAndStrategy.has(key)) {
           byProtocolAndStrategy.set(key, {
             protocol: pos.protocolName,
             positions: [],
+            batchKey: key,
           })
         }
         byProtocolAndStrategy.get(key)!.positions.push(pos)
@@ -189,9 +226,117 @@ async function rebalanceCheckJob(): Promise<void> {
       let rebalancesTriggered = 0
       const thresholds = getThresholds()
 
+      // #345 Agent circuit breaker — evaluated BEFORE any batch executes.
+      // Order: GLOBAL -> PROTOCOL(from) -> USER. An OPEN breaker at any scope
+      // skips the affected batches and a BLOCKED decision is recorded. On
+      // failure the tick FAILS CLOSED: nothing rebalances and the operator is
+      // alerted — the agent never trades blind when the breaker cannot decide.
+      let breakerCtx: BreakerBlockContext
+      try {
+        breakerCtx = await evaluateBreakerTick(
+          positions.map((p: PositionWithUser) => ({
+            id: p.id,
+            userId: p.userId,
+            protocolName: p.protocolName,
+          })),
+          Array.from(byProtocolAndStrategy.values()).map((b) => ({
+            batchKey: b.batchKey,
+            protocol: b.protocol,
+          })),
+          new Date()
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        emitBreakerEvalFailureAlert(message)
+        logger.error(
+          '[Breaker] evaluation failed; halting all rebalancing for the tick',
+          {
+            correlationId,
+            error: message,
+          }
+        )
+        breakerCtx = {
+          globalOpen: true,
+          openProtocols: new Set<string>(),
+          openUsers: new Set<string>(),
+          blockedTargetProtocols: [],
+          trips: [],
+          closes: [],
+          evalFailed: true,
+        }
+      }
+
+      const recordBreakerBlockedDecision = async (
+        batch: {
+          protocol: string
+          batchKey: string
+          positions: PositionWithUser[]
+        },
+        blocking: string[],
+        detail: string
+      ): Promise<void> => {
+        const affectedUserIds = Array.from(
+          new Set(batch.positions.map((p: PositionWithUser) => p.userId))
+        )
+        const trace: DecisionTrace = {
+          currentApy: null,
+          chosenProtocol: null,
+          chosenApy: null,
+          rawImprovement: null,
+          netImprovement: null,
+          estCostPercent: null,
+          costBreakdown: null,
+          thresholds,
+          candidates: [],
+        }
+        await persistRebalanceDecision({
+          batchKey: batch.batchKey,
+          fromProtocol: batch.protocol,
+          outcome: 'BLOCKED',
+          blockedReason: 'circuit_breaker_open',
+          thresholds,
+          trace,
+          rationale: `Skipped by agent circuit breaker (${detail}): ${blocking.join(', ')}`,
+          affectedUserIds,
+          affectedPositions: batch.positions.length,
+        })
+      }
+
       for (const batch of byProtocolAndStrategy.values()) {
-        const { protocol, positions: protocolPositions } = batch
+        const { protocol } = batch
+        const protocolPositions = batch.positions.filter((position) =>
+          volatilityAllowedByUser.get(position.userId)
+        )
+        if (protocolPositions.length === 0) continue
         const lead = effectiveByUser.get(protocolPositions[0].userId)!
+
+        // #345 — skip batches affected by an OPEN breaker. Precedence:
+        // GLOBAL beats PROTOCOL beats USER; a user's own breaker never helps
+        // them if the whole market is halted. Recorded as a BLOCKED decision
+        // so the explainable-rebalance ledger shows WHY nothing moved.
+        const blocking = breakerCtx.globalOpen
+          ? ['GLOBAL']
+          : [
+              ...(breakerCtx.openProtocols.has(protocol)
+                ? [`PROTOCOL:${protocol}`]
+                : []),
+              ...protocolPositions
+                .filter((p: PositionWithUser) =>
+                  breakerCtx.openUsers.has(p.userId)
+                )
+                .map((p: PositionWithUser) => `USER:${p.userId}`),
+            ]
+
+        if (blocking.length > 0) {
+          await recordBreakerBlockedDecision(
+            batch,
+            blocking,
+            breakerCtx.evalFailed
+              ? 'breaker evaluation failed'
+              : 'open circuit breaker'
+          )
+          continue
+        }
 
         // HAZARD: this guard used to be `strategyName ? … : undefined`, and
         // executeRebalanceIfNeeded skips the strategy engine entirely when
@@ -214,6 +359,12 @@ async function rebalanceCheckJob(): Promise<void> {
                 // Under a follow this is already clamped to the STRICTER of
                 // publisher and follower — see resolveEffectiveConfig.
                 riskCeiling: config.riskCeiling,
+                // Exposure caps (#346): per-protocol overrides + user default
+                // fraction, resolved (tighten-only under a follow) by
+                // resolveEffectiveConfig. Absent for users who never configured
+                // them.
+                exposureCaps: config.exposureCaps,
+                defaultMaxFraction: config.defaultMaxFraction,
                 followedStrategyId: follow?.followedStrategyId ?? undefined,
               }
             })
@@ -227,7 +378,14 @@ async function rebalanceCheckJob(): Promise<void> {
             userId: p.userId,
           })),
           thresholds,
-          userStrategyPreferences
+          userStrategyPreferences,
+          {
+            batchKey: batch.batchKey,
+            strategyName: lead.config.strategyName ?? null,
+            strategyIsFollowed: Boolean(lead.follow),
+            followedStrategyId: lead.follow?.followedStrategyId ?? null,
+            blockedProtocols: breakerCtx.blockedTargetProtocols,
+          }
         )
 
         if (result) {
@@ -236,14 +394,44 @@ async function rebalanceCheckJob(): Promise<void> {
           currentProtocol = result.toProtocol
           currentApy = result.improvedBy
           recordRebalanceTriggered()
-          dispatchWebhookEvent('agent.rebalanced', {
+
+          // #316: every user with a position in this batch had their money
+          // moved, so each gets the event on their own stream. The operator
+          // webhook still fires exactly once — webhook subscriptions are
+          // operator-scoped, not per-user, so fanning it out would duplicate it.
+          const affectedUserIds = Array.from(
+            new Set(protocolPositions.map((p: PositionWithUser) => p.userId))
+          )
+          const rebalancePayload = {
             fromProtocol: result.fromProtocol,
             toProtocol: result.toProtocol,
             amount: result.amount,
             improvedBy: result.improvedBy,
             txHash: result.txHash,
             timestamp: result.timestamp,
-          }).catch(() => {})
+          }
+
+          publishUserEvent(
+            affectedUserIds,
+            EVENT_TYPE_TOPIC['agent.rebalanced'],
+            'agent.rebalanced',
+            rebalancePayload
+          ).catch(() => {})
+
+          // Companion socket-only signal: a dashboard watching `portfolio`
+          // should refresh without also subscribing to agent internals. No
+          // webhook counterpart — an operator endpoint already got the
+          // rebalance above, and a second near-identical POST helps nobody.
+          publishUserEvent(
+            affectedUserIds,
+            EVENT_TYPE_TOPIC['portfolio.updated'],
+            'portfolio.updated',
+            {
+              protocolName: result.toProtocol,
+              positionsAffected: protocolPositions.length,
+              reason: 'rebalance',
+            }
+          ).catch(() => {})
         }
       }
 
@@ -255,6 +443,14 @@ async function rebalanceCheckJob(): Promise<void> {
           positionsChecked: positions.length,
           rebalancesTriggered,
           duration,
+          breakers: {
+            globalOpen: breakerCtx.globalOpen,
+            evalFailed: breakerCtx.evalFailed,
+            trips: breakerCtx.trips.map(
+              (t) => `${t.scope}:${t.scopeKey}:${t.rule}`
+            ),
+            closes: breakerCtx.closes.map((c) => `${c.scope}:${c.scopeKey}`),
+          },
         },
       })
 

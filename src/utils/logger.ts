@@ -1,6 +1,7 @@
 import winston from 'winston'
 import * as fs from 'fs'
 import * as path from 'path'
+import { trace } from '@opentelemetry/api'
 import { getCorrelationId } from './correlation'
 
 // Ensure logs directory exists with fail-safe handling
@@ -42,11 +43,17 @@ function redactSensitiveData(message: string): string {
   return redacted
 }
 
-// Inject correlation ID from AsyncLocalStorage when present
+// Inject correlation ID from AsyncLocalStorage and the active trace context
+// when present, so log lines can be joined to both requests and traces.
 const correlationFormat = winston.format((info) => {
   const correlationId = getCorrelationId()
   if (correlationId && !info.correlationId) {
     info.correlationId = correlationId
+  }
+  const spanContext = trace.getActiveSpan()?.spanContext()
+  if (spanContext && !info.traceId) {
+    info.traceId = spanContext.traceId
+    info.spanId = spanContext.spanId
   }
   return info
 })

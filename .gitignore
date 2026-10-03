@@ -1,5 +1,7 @@
 node_modules
 .env
+.env.*
+!.env.example
 dist
 logs/
 postgres/
@@ -10,3 +12,4 @@ skills-lock.json
 CLAUDE.md
 plan.md
 tasks/
+fix.md

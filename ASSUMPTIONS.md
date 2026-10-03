@@ -113,3 +113,97 @@ riskCeiling? }`** — the three keys `src/agent/loop.ts` actually reads.
     written here despite being out of scope for #322.** It was missing, which
     fails `scripts/check-migration-rollback.sh` on `main` and would have left
     this branch's CI red for an unrelated reason. Flagged in the PR description.
+
+---
+
+## Issue #344 — Strategy What-If Simulation (`POST /strategies/simulate`)
+
+1. **The endpoint is a pure read — zero side effects.** It never writes an
+   `OutboxOp`, `AgentLog`, `Transaction`, `RebalanceDecision`, `User`,
+   `PublishedStrategy`, or `Position` row. `src/strategy/simulation-service.ts`
+   enforces this by convention; `src/agent/simulate.ts` enforces it
+   **structurally** (no `src/stellar/*` import, no db, no outbox/event writer),
+   verified by a test that reads the module source.
+2. **All accrual math is `Prisma.Decimal`.** Daily return is simple
+   (non-compounding) `apy/100/365.25` applied to the running value —
+   deliberately not the compounding the backtest engine uses, and never a plain
+   float. See the #344 request: momentum must never come from float drift.
+3. **The historical leg reuses the live cost model with the backtest engine's
+   amount encoding.** Move amounts are encoded as `value × 10^18` (the
+   `src/agent/backtest.ts` convention) so `estimateRebalanceCost` divides back
+   to human units and yields realistic fee percentages. We deliberately do NOT
+   mirror the latent plain-integer encoding in `src/agent/tools/actionTools.ts:265`
+   (which would drive network-fee percent toward ~1e15 and block every move).
+4. **The counterfactual is a clean hold.** Same starting value in the same
+   starting protocol for the whole window, never rebalancing, never paying fees.
+   It answers "what if I had just left it alone?" in direct side-by-side with
+   the strategy leg.
+5. **A protocol with no retained history is treated as unavailable — never
+   zero-filled or extrapolated.** Missing protocols and a truncated window are
+   surfaced as `dataCaveats`, not silently hidden.
+6. **Replay bounds.** `historyWindowDays` is capped at 180
+   (`SIMULATE_MAX_WINDOW_DAYS`) at both the validator and the service, and the
+   replay series is clamped at both ends to retained observations.
+7. **Resolution precedence and risk tightening** follow `resolveEffectiveConfig`
+   (#285): followed config → submitted inline config → caller's own config, and
+   the effective risk ceiling is always the stricter of the caller's and any
+   applied ceiling. A simulation can only tighten exposure.
+8. **Short-TTL cache.** Results are cached 120 s under
+   `strategy-simulate:{userId}:{simulationToken}` where `simulationToken` is a
+   sha-256 of the canonical config + window, so identical previews are cheap and
+   never leak across users.
+
+## Issue #316 — Authenticated Real-Time WebSocket Streaming
+
+1. **The durable stream is Postgres, not a Redis Stream.** `src/config/redis.ts`
+   degrades to a no-op when `REDIS_URL` is unset — the configuration most
+   environments and the whole test suite run — so a Redis-backed stream would
+   make `resume afterSeq` silently unavailable exactly where it is hardest to
+   notice, and would put durability on a store we treat elsewhere as a cache.
+   Redis stays in the design as the cross-pod *transport*. Justified in code on
+   `model UserEvent` in `prisma/schema.prisma`.
+
+2. **Stream retention defaults to 7 days and 5000 rows per user.** This table
+   exists to close a reconnect gap, not to be a second event log — `Transaction`
+   and `ProcessedEvent` remain the durable record. Both bounds are needed: age
+   alone lets one pathological account grow without limit inside the window.
+
+3. **`seq` is exposed to clients as a JSON `number`, not a string.** Postgres
+   returns `BIGINT` and Prisma maps it to `bigint`, which `JSON.stringify`
+   refuses. A per-user counter would need to pass 2^53 events before the
+   conversion could lose precision.
+
+4. **`subscribe` starts at "now"; only `resume` replays.** A client that wants
+   history asks for it. Making `subscribe` replay by default would turn every
+   fresh connection into a retention-sized read.
+
+5. **Coalescing is opt-in per subscription and lossy for `resume`.** Suppressed
+   events stay in the store but are not redelivered, because the client's
+   `afterSeq` has already moved past them. Default-off makes that the client's
+   trade, not the server's.
+
+6. **A revoked session is caught by polling, not by a push.** `WS_SESSION_RECHECK_MS`
+   (60s) re-verifies each live socket. Polling is the one mechanism that covers
+   every way a session can die — logout, expiry, deactivation, admin action —
+   without each of those code paths needing to know sockets exist. Logout
+   additionally closes sockets immediately on the pod handling it.
+
+7. **Delegated topic mapping: `VIEW` → portfolio/transactions/agent/alerts,
+   `MANAGE_STRATEGY` → strategies.** `DEPOSIT`/`WITHDRAW` add no topics of their
+   own — the confirmations they produce are already covered by `transactions`
+   under `VIEW`.
+
+8. **The webhook leg still receives the unredacted payload.** Webhook
+   subscriptions are operator-scoped and their endpoints are trusted servers;
+   an end user's browser is not. Only the socket payload is projected onto the
+   per-event-type allowlist.
+
+9. **`agent.rebalanced` from `src/stellar/events.ts` has no user stream.** The
+   contract event is protocol-wide with no user to address, so it publishes with
+   an empty user list and reaches the webhook channel alone. The per-user view
+   of a rebalance comes from `src/agent/loop.ts`, which knows whose positions
+   moved.
+
+10. **A `?token=` query parameter is deliberately unsupported.** URLs reach
+    access logs, proxy logs, and referrers, and the handshake token is a live
+    session. Browsers use the `Sec-WebSocket-Protocol: bearer, <jwt>` pair.

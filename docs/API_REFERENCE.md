@@ -23,26 +23,38 @@ Comprehensive reference for all backend endpoints defined in src/routes.
 - JWT middleware endpoint: POST /api/auth/logout uses AuthMiddleware.validateJwt and may return 401 with specific JWT/session errors.
 - Twilio webhook auth: POST /api/whatsapp/webhook requires x-twilio-signature and TWILIO_AUTH_TOKEN; in production, invalid signatures are rejected with 403 Forbidden.
 
-## Common Error Response Shapes
+## Error Responses
 
-- Validation errors (zod):
-  {
-  "error": "Validation error",
-  "details": {
-  "formErrors": [],
-  "fieldErrors": {
-  "fieldName": ["error message"]
-  }
-  }
-  }
-- Unauthorized:
-  {
-  "error": "Unauthorized"
-  }
-- Not found:
-  {
-  "error": "<resource-specific message>"
-  }
+Every 4xx/5xx response uses one JSON envelope, enforced centrally by
+`errorResponseMiddleware` (`src/middleware/errorResponse.ts`) and the generic
+`errorHandler`:
+
+```json
+{
+  "status": 400,
+  "code": "VALIDATION_ERROR",
+  "message": "Validation failed",
+  "error": "Validation failed",
+  "details": [{ "field": "amount", "path": "amount", "message": "Number must be greater than 0" }],
+  "requestId": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": "2026-09-27T12:00:00.000Z"
+}
+```
+
+| Field | Notes |
+|---|---|
+| `status` | HTTP status code, repeated in the body |
+| `code` | Machine-readable code. Defaults by status (`BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `PAYLOAD_TOO_LARGE`, `RATE_LIMITED`, `VALIDATION_ERROR`, `INTERNAL_ERROR`, `SERVICE_UNAVAILABLE`, `TIMEOUT`, …); routes may return a more specific domain code |
+| `message` | Human-readable message. **Always `Internal server error` for 500s** outside development; no stack traces or internal error text are ever returned |
+| `error` | Deprecated alias of `message` for clients written against the old `{ "error": "..." }` shape |
+| `details` | Optional. For validation failures from the `validate()` middleware it is an array of `{ field, message }` |
+| `requestId` | Same value as the `X-Request-ID` response header — quote it when reporting issues |
+| `timestamp` | ISO-8601 time the error was produced |
+
+Additional route-specific fields (for example `success: false` or `retryAfter`)
+are preserved alongside the envelope. Unknown routes return `404 NOT_FOUND`;
+malformed JSON bodies return `400 BAD_REQUEST`. Health probes (`/health/*`) and
+`/metrics` keep their own status payloads.
 
 ---
 
@@ -629,6 +641,8 @@ Response 201:
 "assetSymbol": "USDC",
 "protocolName": "Blend"
 },
+"estFee": 100,
+"estConfirmationSeconds": 8,
 "whatsappReply": "..."
 }
 
@@ -697,6 +711,8 @@ Response 201:
 "assetSymbol": "USDC",
 "protocolName": "Blend"
 },
+"estFee": 500,
+"estConfirmationSeconds": 4,
 "whatsappReply": "..."
 }
 
@@ -780,3 +796,30 @@ Response 404:
 - deposit.ts: POST /api/deposit
 - withdraw.ts: POST /api/withdraw
 - vault.ts: GET /api/vault/state, GET /api/vault/balance
+- network.ts: GET /api/v1/network/conditions
+
+---
+
+## Network
+
+### GET /api/v1/network/conditions
+
+- Auth: none (public, rate-limited)
+- Description: Current fee oracle snapshot and per-priority ETA bands.
+- Request params: none
+
+Response 200:
+{
+"recommendedBaseFee": 100,
+"aggressiveBaseFee": 500,
+"congestionLevel": "low",
+"ledgerCapacityUsage": 0.3,
+"sampledAt": "2026-08-30T00:00:00.000Z",
+"ttlMs": 30000,
+"stale": false,
+"etaBands": {
+  "LOW": { "minSeconds": 10, "maxSeconds": 30 },
+  "NORMAL": { "minSeconds": 5, "maxSeconds": 15 },
+  "CRITICAL": { "minSeconds": 2, "maxSeconds": 8 }
+}
+}

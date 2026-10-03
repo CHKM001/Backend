@@ -5,6 +5,7 @@ import {
   computeDrawdownPercent,
   rollingPeak,
   evaluateRule,
+  evaluateConditionNode,
   type EvaluatableRule,
 } from '../../../src/services/alertEvaluator'
 
@@ -136,6 +137,79 @@ describe('alertEvaluator', () => {
       }
       const result = evaluateRule(rule, 4.5, now)
       expect(result.shouldFire).toBe(true)
+    })
+  })
+
+  describe('evaluateConditionNode', () => {
+    it('evaluates nested AND/OR trees and supports NOT inversion', () => {
+      const root = {
+        operator: 'AND' as const,
+        children: [
+          {
+            operator: 'CONDITION' as const,
+            metric: 'PROTOCOL_APY' as const,
+            comparator: 'LT' as const,
+            threshold: 5,
+          },
+          {
+            operator: 'OR' as const,
+            children: [
+              {
+                operator: 'CONDITION' as const,
+                metric: 'POSITION_DRAWDOWN' as const,
+                comparator: 'GT' as const,
+                threshold: 10,
+              },
+              {
+                operator: 'NOT' as const,
+                children: [
+                  {
+                    operator: 'CONDITION' as const,
+                    metric: 'PORTFOLIO_VALUE' as const,
+                    comparator: 'LT' as const,
+                    threshold: 1000,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      } as const
+
+      const result = evaluateConditionNode(root, {
+        PROTOCOL_APY: 4,
+        POSITION_DRAWDOWN: 8,
+        PORTFOLIO_VALUE: 1200,
+      })
+
+      expect(result.matched).toBe(true)
+      expect(result.partialData).toBe(false)
+    })
+
+    it('marks partial data as unknown for missing leaf values', () => {
+      const result = evaluateConditionNode(
+        {
+          operator: 'AND' as const,
+          children: [
+            {
+              operator: 'CONDITION' as const,
+              metric: 'PROTOCOL_APY' as const,
+              comparator: 'LT' as const,
+              threshold: 5,
+            },
+            {
+              operator: 'CONDITION' as const,
+              metric: 'POSITION_DRAWDOWN' as const,
+              comparator: 'GT' as const,
+              threshold: 10,
+            },
+          ],
+        } as const,
+        { PROTOCOL_APY: 4 }
+      )
+
+      expect(result.partialData).toBe(true)
+      expect(result.matched).toBe(false)
     })
   })
 })

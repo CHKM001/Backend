@@ -128,6 +128,7 @@ export const mapGoalToResponse = (goal: any) => ({
   startingAmount: Number(goal.startingAmount),
   targetDate: goal.targetDate.toISOString(),
   riskCeiling: goal.riskCeiling,
+  includeExternalHoldings: goal.includeExternalHoldings ?? false,
   status: goal.status,
   createdAt: goal.createdAt.toISOString(),
   updatedAt: goal.updatedAt.toISOString(),
@@ -159,3 +160,139 @@ export const mapAllocationSuggestionToResponse = (suggestion: any) => ({
   reason: suggestion.reason ?? null,
   computedAt: suggestion.computedAt.toISOString(),
 })
+
+/**
+ * Real-time stream payload allowlists (#316) — the socket's equivalent of the
+ * REST mappers above, and held to the same rule.
+ *
+ * A WebSocket frame is a response body. It gets the same discipline: a
+ * hand-written allowlist per event type, never a spread, never a denylist. The
+ * emit sites pass the same object they hand `dispatchWebhookEvent`, and those
+ * objects carry `userId` (an operator's webhook endpoint is a trusted server;
+ * an end user's browser is not). Anything not named here is dropped before the
+ * payload is persisted to `user_events`, so a replay cannot leak what the live
+ * path stripped.
+ *
+ * Adding a key here is the moment to ask: would I put this in a REST response
+ * for this user? If not, it does not belong on their socket either.
+ */
+const USER_EVENT_PAYLOAD_ALLOWLIST: Record<string, readonly string[]> = {
+  'transaction.confirmed': [
+    'txHash',
+    'type',
+    'status',
+    'assetSymbol',
+    'amount',
+    'protocolName',
+  ],
+  // `user` (the wallet address) is deliberately absent: the client already
+  // knows its own wallet, and a delegated parent connection must not learn the
+  // child's address from a stream frame.
+  'deposit.received': [
+    'txHash',
+    'amount',
+    'shares',
+    'assetSymbol',
+    'protocolName',
+    'network',
+  ],
+  'withdraw.completed': [
+    'txHash',
+    'amount',
+    'shares',
+    'assetSymbol',
+    'protocolName',
+    'network',
+  ],
+  'agent.rebalanced': [
+    'txHash',
+    'fromProtocol',
+    'toProtocol',
+    'amount',
+    'improvedBy',
+    'timestamp',
+  ],
+  // #343 — the deep-link pointer to a recorded rebalance decision's rationale.
+  // Fields the client needs to explain a move, never another user's data.
+  'agent.decision_recorded': [
+    'decisionId',
+    'outcome',
+    'fromProtocol',
+    'toProtocol',
+    'blockedReason',
+    'createdAt',
+  ],
+  'fiat.order.settled': [
+    'orderId',
+    'provider',
+    'direction',
+    'status',
+    'txHash',
+  ],
+  'fiat.order.failed': [
+    'orderId',
+    'provider',
+    'direction',
+    'status',
+    'failureReason',
+  ],
+  'fiat.order.rate_mismatch': [
+    'orderId',
+    'provider',
+    'direction',
+    'quotedCryptoAmount',
+    'settledCryptoAmount',
+    'driftPct',
+  ],
+  'recurring_deposit.executed': [
+    'planId',
+    'amount',
+    'assetSymbol',
+    'cadence',
+    'txHash',
+  ],
+  'recurring_deposit.failed': [
+    'planId',
+    'amount',
+    'assetSymbol',
+    'cadence',
+    'reason',
+  ],
+  'alert_rule.triggered': [
+    'ruleId',
+    'metric',
+    'protocolName',
+    'comparator',
+    'threshold',
+    'observedValue',
+    'triggeredAt',
+  ],
+  // `followerUserId` is dropped: the frame is already scoped to that follower.
+  'strategy.updated': ['strategyId', 'label', 'configVersion'],
+  'strategy.unpublished': ['strategyId', 'label'],
+  // `error` is the user's own op failure text, already sent to their webhooks.
+  'outbox.op_failed': ['opId', 'kind', 'attempts', 'error'],
+  'portfolio.updated': ['protocolName', 'positionsAffected', 'reason'],
+}
+
+/**
+ * Project a domain payload onto the allowlist for its event type.
+ *
+ * An unknown event type yields `{}` rather than the original object: a type
+ * nobody has reviewed is a type whose fields nobody has reviewed. Values are
+ * copied as-is (they are already JSON-safe primitives at every emit site);
+ * `undefined` values are omitted so the stored JSON stays clean.
+ */
+export const mapUserEventPayloadToResponse = (
+  eventType: string,
+  payload: Record<string, unknown>
+): Record<string, unknown> => {
+  const allowed = USER_EVENT_PAYLOAD_ALLOWLIST[eventType]
+  if (!allowed) return {}
+
+  const out: Record<string, unknown> = {}
+  for (const key of allowed) {
+    if (payload[key] !== undefined) out[key] = payload[key]
+  }
+  return out
+}

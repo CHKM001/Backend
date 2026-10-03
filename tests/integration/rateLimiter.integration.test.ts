@@ -4,6 +4,7 @@ import { rateLimiter, buildRateLimiter } from '../../src/middleware/rateLimiter'
 
 jest.mock('../../src/utils/metrics', () => ({
   recordRateLimitHit: jest.fn(),
+  updateRateLimitViolations: jest.fn(),
 }))
 
 jest.mock('../../src/utils/logger', () => ({
@@ -21,6 +22,12 @@ jest.mock('../../src/config/env', () => ({
       // #322 — every limiter in rateLimiter.ts is constructed at module load,
       // so a block missing here fails the whole suite at import, not at use.
       optimizerRateLimit: { windowMs: 60000, max: 5 },
+      // #344 — strategy simulate replay limiter (CPU-bound).
+      simulateRateLimit: { windowMs: 60000, max: 6 },
+      // #473 — identity tiers and the sensitive-operation budget.
+      anonymousRateLimit: { windowMs: 900000, max: 60 },
+      authenticatedRateLimit: { windowMs: 900000, max: 600 },
+      sensitiveRateLimit: { windowMs: 900000, max: 10 },
       trustedIps: [],
       internalServiceToken: '',
     },

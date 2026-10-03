@@ -86,3 +86,42 @@ export async function cacheDel(key: string): Promise<void> {
     })
   }
 }
+
+/**
+ * The shared client, or null when REDIS_URL is unset (#316).
+ *
+ * Exposed for callers that need Redis as a *transport* rather than a cache —
+ * today that is only the cross-pod event bridge. Callers MUST treat null as
+ * "Redis is not available" and degrade, exactly as the cache helpers above do.
+ */
+export function getRedisClient(): Redis | null {
+  return getClient()
+}
+
+/**
+ * Open a dedicated connection for SUBSCRIBE (#316).
+ *
+ * A Redis connection in subscriber mode cannot issue ordinary commands, so the
+ * shared client above must never be used for it — that would silently break
+ * every cacheGet in the process. Returns null when REDIS_URL is unset.
+ *
+ * The caller owns the returned client and must `quit()` it on shutdown.
+ */
+export function createRedisSubscriber(): Redis | null {
+  const url = process.env.REDIS_URL
+  if (!url) return null
+
+  const subscriber = new Redis(url, {
+    maxRetriesPerRequest: null, // a subscriber must keep retrying, not give up
+    lazyConnect: false,
+    enableOfflineQueue: true,
+  })
+
+  subscriber.on('error', (err) => {
+    logger.error('[redis] subscriber error', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  })
+
+  return subscriber
+}

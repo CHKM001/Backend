@@ -8,6 +8,7 @@
  * - DLQ size
  * - Cursor lag
  * - Agent loop heartbeat state
+ * - Queue lag, worker saturation, and throughput
  */
 
 import client from 'prom-client'
@@ -84,6 +85,25 @@ export const dlqAlertActive = new client.Gauge({
   registers: [register],
 })
 
+export const outboundNotificationAttempts = new client.Counter({
+  name: 'outbound_notification_attempts_total',
+  help: 'Outbound notification delivery attempts by channel and outcome',
+  labelNames: ['channel', 'status'] as const,
+  registers: [register],
+})
+
+export const outboundNotificationDlqSize = new client.Gauge({
+  name: 'outbound_notification_dlq_size',
+  help: 'Current number of outbound notifications in the dead-letter queue',
+  registers: [register],
+})
+
+export const secretCredentialValidationFailures = new client.Gauge({
+  name: 'secret_credential_validation_failures',
+  help: 'Number of missing, expired, or malformed configured secrets',
+  registers: [register],
+})
+
 // ── Cursor/Lag Metrics ──────────────────────────────────────────────────────────
 
 export const cursorLag = new client.Gauge({
@@ -125,10 +145,70 @@ export const agentRebalancesTriggeredTotal = new client.Counter({
   registers: [register],
 })
 
+// #345 — agent circuit breaker observability.
+
+export const agentBreakerState = new client.Gauge({
+  name: 'agent_breaker_state',
+  help: 'Agent circuit breaker state by scope and key: 0 closed, 1 half-open, 2 open',
+  labelNames: ['scope', 'scopeKey'] as const,
+  registers: [register],
+})
+
+export const agentBreakerTripsTotal = new client.Counter({
+  name: 'agent_breaker_trips_total',
+  help: 'Agent circuit breaker trips by scope and rule',
+  labelNames: ['scope', 'rule'] as const,
+  registers: [register],
+})
+
+/**
+ * Record a breaker's current state for dashboards.
+ */
+export function setAgentBreakerState(
+  scope: string,
+  scopeKey: string,
+  state: 'CLOSED' | 'HALF_OPEN' | 'OPEN'
+): void {
+  const value = state === 'CLOSED' ? 0 : state === 'HALF_OPEN' ? 1 : 2
+  agentBreakerState.set({ scope, scopeKey }, value)
+}
+
+/**
+ * Record a breaker trip (or re-trip).
+ */
+export function recordAgentBreakerTrip(scope: string, rule: string): void {
+  agentBreakerTripsTotal.inc({ scope, rule })
+}
+
 export const agentSnapshotDuration = new client.Histogram({
   name: 'agent_snapshot_duration_seconds',
   help: 'Duration of balance snapshot operations in seconds',
   buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60],
+  registers: [register],
+})
+
+export const portfolioAnnualisedVolatilityPct = new client.Histogram({
+  name: 'portfolio_annualised_volatility_pct',
+  help: 'Annualised portfolio volatility observed by the rebalance circuit breaker, in percent',
+  buckets: [5, 10, 20, 30, 50, 75, 100, 150, 200],
+  registers: [register],
+})
+
+export const volatilityBreakerTripsTotal = new client.Counter({
+  name: 'portfolio_volatility_circuit_breaker_trips_total',
+  help: 'Total number of portfolio volatility circuit-breaker activations',
+  registers: [register],
+})
+
+export const volatilityBreakerActivePortfolios = new client.Gauge({
+  name: 'portfolio_volatility_circuit_breaker_active_portfolios',
+  help: 'Number of portfolios currently blocked by the volatility circuit breaker',
+  registers: [register],
+})
+
+export const volatilityBreakerEvaluationFailuresTotal = new client.Counter({
+  name: 'portfolio_volatility_circuit_breaker_evaluation_failures_total',
+  help: 'Total number of portfolio risk evaluations that failed closed',
   registers: [register],
 })
 
@@ -279,8 +359,8 @@ export const externalServiceErrorsTotal = new client.Counter({
 
 export const rateLimitHitsTotal = new client.Counter({
   name: 'rate_limit_hits_total',
-  help: 'Total number of rate limit hits by route group',
-  labelNames: ['route_group', 'limiter_type'] as const,
+  help: 'Total number of rate limit hits by route group, limiter tier and principal type',
+  labelNames: ['route_group', 'limiter_type', 'principal_type'] as const,
   registers: [register],
 })
 
@@ -416,6 +496,22 @@ export function recordRebalanceTriggered(): void {
   agentRebalancesTriggeredTotal.inc()
 }
 
+export function observePortfolioVolatility(volatilityPct: number): void {
+  portfolioAnnualisedVolatilityPct.observe(volatilityPct)
+}
+
+export function recordVolatilityBreakerTrip(): void {
+  volatilityBreakerTripsTotal.inc()
+}
+
+export function setVolatilityBreakerActivePortfolios(count: number): void {
+  volatilityBreakerActivePortfolios.set(count)
+}
+
+export function recordVolatilityBreakerEvaluationFailure(): void {
+  volatilityBreakerEvaluationFailuresTotal.inc()
+}
+
 /**
  * Record database operation duration
  */
@@ -494,11 +590,23 @@ export function recordExternalServiceError(
 /**
  * Record a rate limit hit
  */
+/**
+ * Record a request blocked by a rate limiter (#473).
+ *
+ * `principalType` is what makes this alertable: a rise in `anonymous` blocks is
+ * scraping or credential stuffing, while a rise in `authenticated` blocks is a
+ * broken client or a leaked key. Same 429 status, completely different incident.
+ */
 export function recordRateLimitHit(
   routeGroup: string,
-  limiterType: string
+  limiterType: string,
+  principalType: string = 'unknown'
 ): void {
-  rateLimitHitsTotal.inc({ route_group: routeGroup, limiter_type: limiterType })
+  rateLimitHitsTotal.inc({
+    route_group: routeGroup,
+    limiter_type: limiterType,
+    principal_type: principalType,
+  })
 }
 
 /**
@@ -519,10 +627,11 @@ export function updateRateLimitViolations(
 }
 
 /**
- * Record a rejected request due to size or content-type
+ * Record a request rejected before it reached a route handler — oversized
+ * payload, disallowed content type, or a CORS origin failure (#471).
  */
 export function recordRejectedRequest(
-  reason: 'oversized' | 'content_type'
+  reason: 'oversized' | 'content_type' | 'cors_origin' | 'cors_misconfiguration'
 ): void {
   rejectedRequestsTotal.inc({ reason })
 }
@@ -641,6 +750,422 @@ export function recordOutboxFeeBump(kind: string): void {
 
 export function updateOutboxStuckSubmitted(count: number): void {
   outboxStuckSubmitted.set(count)
+}
+
+// ── Fee Oracle Metrics (#342) ────────────────────────────────────────────────
+
+export const feeOracleRecommendedBaseFee = new client.Gauge({
+  name: 'fee_oracle_recommended_base_fee',
+  help: 'Recommended base fee in stroops (p70 of inclusion fees, floored at 100)',
+  registers: [register],
+})
+
+export const feeOracleAggressiveBaseFee = new client.Gauge({
+  name: 'fee_oracle_aggressive_base_fee',
+  help: 'Aggressive base fee in stroops (p95) for CRITICAL ops during congestion',
+  registers: [register],
+})
+
+export const feeOracleLedgerCapacityUsage = new client.Gauge({
+  name: 'fee_oracle_ledger_capacity_usage',
+  help: 'Ledger capacity usage 0..1 from latest ledger',
+  registers: [register],
+})
+
+export const feeOracleCongestionLevel = new client.Gauge({
+  name: 'fee_oracle_congestion_level',
+  help: 'Congestion level as numeric enum (0=low,1=elevated,2=high,3=severe)',
+  registers: [register],
+})
+
+export const feeOracleStalenessSeconds = new client.Gauge({
+  name: 'fee_oracle_staleness_seconds',
+  help: 'Seconds since last successful fee oracle sample',
+  registers: [register],
+})
+
+export const feeOracleClampTotal = new client.Counter({
+  name: 'fee_oracle_clamp_total',
+  help: 'Fee oracle clamps to min/max bounds',
+  labelNames: ['bound'] as const,
+  registers: [register],
+})
+
+export const outboxLowDeferredTotal = new client.Counter({
+  name: 'outbox_low_deferred_total',
+  help: 'LOW ops deferred due to high congestion',
+  registers: [register],
+})
+
+export const outboxAggressiveFeeUsedTotal = new client.Counter({
+  name: 'outbox_aggressive_fee_used_total',
+  help: 'CRITICAL ops that used aggressive base fee during congestion',
+  registers: [register],
+})
+
+export const outboxMaxFeeHitTotal = new client.Counter({
+  name: 'outbox_max_fee_hit_total',
+  help: 'Ops that hit OUTBOX_MAX_ABS_FEE cap',
+  labelNames: ['priority'] as const,
+  registers: [register],
+})
+
+export function recordFeeOracleClamp(bound: 'min' | 'max'): void {
+  feeOracleClampTotal.inc({ bound })
+}
+
+export function recordOutboxLowDeferred(): void {
+  outboxLowDeferredTotal.inc()
+}
+
+export function recordOutboxAggressiveFeeUsed(): void {
+  outboxAggressiveFeeUsedTotal.inc()
+}
+
+export function recordOutboxMaxFeeHit(priority: string): void {
+  outboxMaxFeeHitTotal.inc({ priority })
+}
+
+// ── Sponsored Reserves Metrics (#339) ──────────────────────────────────────
+
+export const reserveOutstandingXlm = new client.Gauge({
+  name: 'reserve_sponsorship_outstanding_xlm',
+  help: 'Sum of xlmReserved for ACTIVE ReserveSponsorship rows — platform outstanding reserve liability',
+  registers: [register],
+})
+
+export const sponsorAvailableXlmGauge = new client.Gauge({
+  name: 'sponsor_available_xlm',
+  help: 'Available XLM per sponsor account (balance - selling liabilities)',
+  labelNames: ['sponsorAccount'] as const,
+  registers: [register],
+})
+
+export const reserveReconciliationDrift = new client.Gauge({
+  name: 'reserve_reconciliation_drift_xlm',
+  help: 'Drift between recorded xlmReserved and on-chain base reserve',
+  registers: [register],
+})
+
+export const sponsorCapacityExhaustedTotal = new client.Counter({
+  name: 'sponsor_capacity_exhausted_total',
+  help: 'Times provisioning refused due to sponsor_capacity_exhausted',
+  registers: [register],
+})
+
+// ── Real-time WebSocket streaming metrics (#316) ─────────────────────────────
+
+export const wsConnectionsActive = new client.Gauge({
+  name: 'ws_connections_active',
+  help: 'Currently open authenticated WebSocket connections',
+  labelNames: ['mode'] as const, // mode: self|delegated
+  registers: [register],
+})
+
+export const wsHandshakesTotal = new client.Counter({
+  name: 'ws_handshakes_total',
+  help: 'WebSocket handshake attempts by outcome',
+  labelNames: ['outcome'] as const, // outcome: accepted|unauthorized|forbidden|rate_limited|too_many
+  registers: [register],
+})
+
+export const wsMessagesSentTotal = new client.Counter({
+  name: 'ws_messages_sent_total',
+  help: 'Frames pushed to clients, by topic and delivery path',
+  labelNames: ['topic', 'path'] as const, // path: live|replay
+  registers: [register],
+})
+
+export const wsMessagesReceivedTotal = new client.Counter({
+  name: 'ws_messages_received_total',
+  help: 'Client messages received, by message type',
+  labelNames: ['type'] as const,
+  registers: [register],
+})
+
+export const wsReplayEventsTotal = new client.Counter({
+  name: 'ws_replay_events_total',
+  help: 'Events replayed from the durable stream on resume',
+  registers: [register],
+})
+
+export const wsGapsTotal = new client.Counter({
+  name: 'ws_gaps_total',
+  help: 'Gap frames emitted, by reason (retention|backpressure|unknown_stream)',
+  labelNames: ['reason'] as const,
+  registers: [register],
+})
+
+export const wsDroppedEventsTotal = new client.Counter({
+  name: 'ws_dropped_events_total',
+  help: 'Events dropped rather than delivered, by reason (backpressure|coalesced)',
+  labelNames: ['reason'] as const,
+  registers: [register],
+})
+
+export const wsBridgePublishTotal = new client.Counter({
+  name: 'ws_bridge_publish_total',
+  help: 'Cross-pod event publishes, by transport outcome',
+  labelNames: ['outcome'] as const, // outcome: redis|local_only|error
+  registers: [register],
+})
+
+export const wsPublishFailuresTotal = new client.Counter({
+  name: 'ws_publish_failures_total',
+  help: 'publishUserEvent calls that failed to persist to the durable stream',
+  registers: [register],
+})
+
+export function setWsConnectionsActive(
+  mode: 'self' | 'delegated',
+  count: number
+): void {
+  wsConnectionsActive.set({ mode }, count)
+}
+
+export function recordWsHandshake(
+  outcome:
+    'accepted' | 'unauthorized' | 'forbidden' | 'rate_limited' | 'too_many'
+): void {
+  wsHandshakesTotal.inc({ outcome })
+}
+
+export function recordWsMessageSent(
+  topic: string,
+  path: 'live' | 'replay'
+): void {
+  wsMessagesSentTotal.inc({ topic, path })
+}
+
+export function recordWsMessageReceived(type: string): void {
+  wsMessagesReceivedTotal.inc({ type })
+}
+
+export function recordWsReplay(count: number): void {
+  if (count > 0) wsReplayEventsTotal.inc(count)
+}
+
+export function recordWsGap(reason: string): void {
+  wsGapsTotal.inc({ reason })
+}
+
+export function recordWsDroppedEvents(
+  reason: 'backpressure' | 'coalesced',
+  count = 1
+): void {
+  wsDroppedEventsTotal.inc({ reason }, count)
+}
+
+export function recordWsBridgePublish(
+  outcome: 'redis' | 'local_only' | 'error'
+): void {
+  wsBridgePublishTotal.inc({ outcome })
+}
+
+export function recordWsPublishFailure(): void {
+  wsPublishFailuresTotal.inc()
+}
+
+// ── Tool-calling assistant metrics (#318) ────────────────────────────────────
+
+export const assistantTokensTotal = new client.Counter({
+  name: 'assistant_tokens_total',
+  help: 'Total tokens spent by the tool-calling assistant planner',
+  registers: [register],
+})
+
+export const assistantToolCallDuration = new client.Histogram({
+  name: 'assistant_tool_call_duration_seconds',
+  help: 'Duration of an assistant tool execution in seconds',
+  labelNames: ['tool', 'status'] as const,
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10],
+  registers: [register],
+})
+
+export const assistantToolCallsTotal = new client.Counter({
+  name: 'assistant_tool_calls_total',
+  help: 'Total assistant tool calls, by tool and outcome',
+  labelNames: ['tool', 'outcome'] as const,
+  registers: [register],
+})
+
+export const assistantFallbackTotal = new client.Counter({
+  name: 'assistant_fallback_total',
+  help: 'Total times the assistant degraded to the rule-based parser',
+  labelNames: ['reason'] as const,
+  registers: [register],
+})
+
+export function recordAssistantTokenSpend(tokens: number): void {
+  assistantTokensTotal.inc(tokens)
+}
+
+export function recordAssistantToolCall(
+  tool: string,
+  outcome: 'executed' | 'rejected' | 'error',
+  durationSeconds?: number
+): void {
+  assistantToolCallsTotal.inc({ tool, outcome })
+  if (durationSeconds !== undefined) {
+    assistantToolCallDuration.observe(
+      { tool, status: outcome },
+      durationSeconds
+    )
+  }
+}
+
+export function recordAssistantFallback(
+  reason: 'model_error' | 'budget_exceeded' | 'schema_error'
+): void {
+  assistantFallbackTotal.inc({ reason })
+}
+
+// ── Queue Health Metrics (#520) ─────────────────────────────────────────────
+
+export const queueLagSeconds = new client.Gauge({
+  name: 'queue_lag_seconds',
+  help: 'Time in seconds that the oldest item has been waiting in the queue',
+  labelNames: ['queue_name'] as const,
+  registers: [register],
+})
+
+export const queueDepth = new client.Gauge({
+  name: 'queue_depth',
+  help: 'Current number of items in the queue',
+  labelNames: ['queue_name'] as const,
+  registers: [register],
+})
+
+export const queueThroughputPerSecond = new client.Gauge({
+  name: 'queue_throughput_per_second',
+  help: 'Items processed per second (rolling 1-minute average)',
+  labelNames: ['queue_name'] as const,
+  registers: [register],
+})
+
+export const workerSaturation = new client.Gauge({
+  name: 'worker_saturation',
+  help: 'Worker utilization as a percentage (0-100)',
+  labelNames: ['worker_type'] as const,
+  registers: [register],
+})
+
+export const workerActiveCount = new client.Gauge({
+  name: 'worker_active_count',
+  help: 'Number of currently active workers',
+  labelNames: ['worker_type'] as const,
+  registers: [register],
+})
+
+export const workerIdleCount = new client.Gauge({
+  name: 'worker_idle_count',
+  help: 'Number of currently idle workers',
+  labelNames: ['worker_type'] as const,
+  registers: [register],
+})
+
+export const workerProcessingDuration = new client.Histogram({
+  name: 'worker_processing_duration_seconds',
+  help: 'Duration of worker task processing in seconds',
+  labelNames: ['worker_type', 'queue_name'] as const,
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60],
+  registers: [register],
+})
+
+export const queueProcessingErrorsTotal = new client.Counter({
+  name: 'queue_processing_errors_total',
+  help: 'Total number of queue processing errors',
+  labelNames: ['queue_name', 'error_type'] as const,
+  registers: [register],
+})
+
+export const queueBlockedSeconds = new client.Gauge({
+  name: 'queue_blocked_seconds',
+  help: 'Time in seconds the queue has been blocked (unable to process)',
+  labelNames: ['queue_name'] as const,
+  registers: [register],
+})
+
+/**
+ * Record queue lag (age of oldest item)
+ */
+export function recordQueueLag(queueName: string, lagSeconds: number): void {
+  queueLagSeconds.set({ queue_name: queueName }, lagSeconds)
+}
+
+/**
+ * Record queue depth (number of items)
+ */
+export function recordQueueDepth(queueName: string, depth: number): void {
+  queueDepth.set({ queue_name: queueName }, depth)
+}
+
+/**
+ * Record queue throughput (items per second)
+ */
+export function recordQueueThroughput(queueName: string, throughput: number): void {
+  queueThroughputPerSecond.set({ queue_name: queueName }, throughput)
+}
+
+/**
+ * Record worker saturation (utilization percentage)
+ */
+export function recordWorkerSaturation(
+  workerType: string,
+  saturation: number
+): void {
+  workerSaturation.set({ worker_type: workerType }, saturation)
+}
+
+/**
+ * Record active worker count
+ */
+export function recordWorkerActiveCount(
+  workerType: string,
+  count: number
+): void {
+  workerActiveCount.set({ worker_type: workerType }, count)
+}
+
+/**
+ * Record idle worker count
+ */
+export function recordWorkerIdleCount(
+  workerType: string,
+  count: number
+): void {
+  workerIdleCount.set({ worker_type: workerType }, count)
+}
+
+/**
+ * Record worker processing duration
+ */
+export function recordWorkerProcessingDuration(
+  workerType: string,
+  queueName: string,
+  durationSeconds: number
+): void {
+  workerProcessingDuration.observe(
+    { worker_type: workerType, queue_name: queueName },
+    durationSeconds
+  )
+}
+
+/**
+ * Record queue processing error
+ */
+export function recordQueueProcessingError(
+  queueName: string,
+  errorType: string
+): void {
+  queueProcessingErrorsTotal.inc({ queue_name: queueName, error_type: errorType })
+}
+
+/**
+ * Record queue blocked time
+ */
+export function recordQueueBlocked(queueName: string, blockedSeconds: number): void {
+  queueBlockedSeconds.set({ queue_name: queueName }, blockedSeconds)
 }
 
 /**

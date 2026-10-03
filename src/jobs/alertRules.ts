@@ -5,10 +5,13 @@ import {
   runWithCorrelationIdAsync,
 } from '../utils/correlation'
 import { recordJobSuccess, recordJobFailure } from '../utils/job-metrics'
+import { scheduleResilientJob } from './resilientScheduler'
 import { config } from '../config/env'
-import { dispatchWebhookEvent } from '../services/webhookDispatcher'
+import { publishUserEvent } from '../events/publisher'
+import { EVENT_TYPE_TOPIC } from '../events/types'
 import { sendWhatsAppMessage } from '../utils/twilio-client'
 import { formatAlertTriggeredReply } from '../whatsapp/formatters'
+import { sendPushNotification } from '../controllers/push-controller'
 import {
   compare,
   cooldownCutoff,
@@ -24,7 +27,9 @@ import {
  * On each tick this job loads ACTIVE rules, computes the current value for each
  * rule's metric, and fires a notification when the comparator condition holds
  * and the rule is outside its cooldown window. Fires go out over the webhook
- * (HMAC-signed, via the existing dispatchWebhookEvent) and/or WhatsApp channels.
+ * (HMAC-signed, via publishUserEvent's webhook leg) and/or WhatsApp channels.
+ * Every trigger also lands on the user's real-time stream (#316), which is not
+ * something they have to configure.
  *
  * Design decisions (see issue #289):
  *
@@ -47,7 +52,7 @@ import {
  *    row is auto-deactivated (isActive=false) with a clear log line rather than
  *    evaluated against stale/missing data.
  *
- *  • Failed webhook delivery: we reuse dispatchWebhookEvent as-is. Its internal
+ *  • Failed webhook delivery: publishUserEvent reuses the same dispatcher. Its internal
  *    3-attempt backoff is the only retry; there is no separate sweep for alert
  *    deliveries. Rationale documented in docs/ALERTS.md — the next tick re-
  *    evaluates the live condition, so a transient delivery failure self-heals
@@ -168,6 +173,7 @@ async function claimFire(rule: AlertRuleRow, now: Date): Promise<boolean> {
     where: {
       id: rule.id,
       isActive: true,
+      deletedAt: null,
       OR: [{ lastFiredAt: null }, { lastFiredAt: { lte: cutoff } }],
     },
     data: { lastFiredAt: now },
@@ -196,14 +202,23 @@ async function deliverAlert(
   }
 
   const wantsWebhook =
-    rule.deliveryChannel === 'WEBHOOK' || rule.deliveryChannel === 'BOTH'
+    rule.deliveryChannel === 'WEBHOOK' || rule.deliveryChannel === 'BOTH' || rule.deliveryChannel === 'ALL'
   const wantsWhatsApp =
-    rule.deliveryChannel === 'WHATSAPP' || rule.deliveryChannel === 'BOTH'
+    rule.deliveryChannel === 'WHATSAPP' || rule.deliveryChannel === 'BOTH' || rule.deliveryChannel === 'ALL'
+  const wantsPush =
+    rule.deliveryChannel === 'PUSH' || rule.deliveryChannel === 'ALL'
 
-  if (wantsWebhook) {
-    // HMAC-signed via the existing dispatcher; no new unsigned path.
-    await dispatchWebhookEvent('alert_rule.triggered', data)
-  }
+  // #316: the alert always reaches the user's real-time stream — that is the
+  // channel they did not have to configure. The webhook leg stays opt-in via
+  // the rule's deliveryChannel, and is still HMAC-signed by the same
+  // dispatcher; no new unsigned path.
+  await publishUserEvent(
+    rule.userId,
+    EVENT_TYPE_TOPIC['alert_rule.triggered'],
+    'alert_rule.triggered',
+    data,
+    { webhook: wantsWebhook }
+  )
 
   if (wantsWhatsApp) {
     const user = await db.user.findUnique({
@@ -225,6 +240,16 @@ async function deliverAlert(
       await sendWhatsAppMessage({ to: `whatsapp:${user.phone}`, body })
     }
   }
+
+  if (wantsPush) {
+    const title = `Alert: ${rule.metric}`
+    const body = `${rule.metric} is ${observedValue} (threshold: ${threshold})`
+    await sendPushNotification(rule.userId, title, body, data).catch((err) => {
+      logger.warn(`[AlertRules] Failed to send push notification for rule ${rule.id}`, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
 }
 
 export async function runAlertRules(now: Date = new Date()): Promise<void> {
@@ -239,7 +264,7 @@ export async function runAlertRules(now: Date = new Date()): Promise<void> {
 
     try {
       const rules = (await db.alertRule.findMany({
-        where: { isActive: true },
+        where: { isActive: true, deletedAt: null },
         select: {
           id: true,
           userId: true,
@@ -260,7 +285,7 @@ export async function runAlertRules(now: Date = new Date()): Promise<void> {
 
           if (delisted) {
             await db.alertRule.updateMany({
-              where: { id: rule.id },
+              where: { id: rule.id, deletedAt: null },
               data: { isActive: false },
             })
             deactivated++
@@ -332,7 +357,7 @@ export async function runAlertRules(now: Date = new Date()): Promise<void> {
       logBackgroundJob(jobName, 'failed', durationMs / 1000, correlationId, {
         error: errorMessage,
       })
-      recordJobFailure(jobName, durationMs)
+      recordJobFailure(jobName, durationMs, error)
     }
   })
 }
@@ -344,17 +369,15 @@ export async function runAlertRules(now: Date = new Date()): Promise<void> {
  * @returns NodeJS.Timeout handle — pass to clearInterval() on shutdown.
  */
 export function scheduleAlertRules(): NodeJS.Timeout {
-  void runAlertRules()
-
-  const intervalMs = config.alertRules.intervalMs
-  const handle = setInterval(() => {
-    void runAlertRules()
-  }, intervalMs)
-
-  handle.unref?.()
+  const handle = scheduleResilientJob({
+    jobName: 'alert_rules',
+    task: runAlertRules,
+    intervalMs: config.alertRules.intervalMs,
+    unref: true,
+  })
 
   logger.info(
-    `[AlertRules] Alert-rule evaluation scheduled every ${intervalMs}ms`
+    `[AlertRules] Alert-rule evaluation scheduled every ${config.alertRules.intervalMs}ms`
   )
   return handle
 }

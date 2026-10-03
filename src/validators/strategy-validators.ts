@@ -29,6 +29,8 @@ export type MarketplaceWindow = (typeof MARKETPLACE_WINDOWS)[number]
 export type MarketplaceSortField = (typeof MARKETPLACE_SORT_FIELDS)[number]
 
 export const MAX_LABEL_LENGTH = 60
+export const MAX_DESCRIPTION_LENGTH = 280
+export const MAX_TAGS = 5
 
 /** Stellar account (G…) or contract (C…) address: prefix + 55 base32 chars. */
 const STELLAR_ADDRESS_PATTERN = /[GC][A-Z2-7]{55}/
@@ -57,8 +59,36 @@ export const strategyLabelSchema = z
   })
 
 /**
+ * A per-protocol exposure cap override (#346): a maxFraction in (0,1] and/or a
+ * non-negative maxAbsolute. Validated here so a malformed cap set is rejected at
+ * write time with a named issue rather than wedging the agent loop later.
+ */
+const exposureCapOverrideSchema = z
+  .object({
+    maxFraction: z
+      .number()
+      .finite()
+      .gt(0, 'maxFraction must be greater than 0')
+      .lte(1, 'maxFraction must be at most 1')
+      .optional(),
+    maxAbsolute: z
+      .union([
+        z.number().finite().nonnegative(),
+        z
+          .string()
+          .regex(/^\d+(\.\d+)?$/, 'maxAbsolute must be a non-negative number'),
+      ])
+      .optional(),
+  })
+  .refine((v) => v.maxFraction !== undefined || v.maxAbsolute !== undefined, {
+    message: 'each exposure cap must define maxFraction and/or maxAbsolute',
+  })
+
+/**
  * The exact three keys the agent loop reads. Nothing else is copied to a
  * follower — notably `riskTolerance`, which stays personal to each user.
+ * `exposureCaps` and `defaultMaxFraction` (#346) are per-user risk controls and
+ * ARE copied under the tighten-only rule, so a valid cap set is required here.
  */
 export const publishableConfigSchema = z
   .object({
@@ -67,6 +97,15 @@ export const publishableConfigSchema = z
       .record(z.string().min(1).max(100), z.number().finite().min(0).max(100))
       .optional(),
     riskCeiling: z.number().int().min(0).max(100).optional(),
+    defaultMaxFraction: z
+      .number()
+      .finite()
+      .gt(0, 'defaultMaxFraction must be greater than 0')
+      .lte(1, 'defaultMaxFraction must be at most 1')
+      .optional(),
+    exposureCaps: z
+      .record(z.string().min(1).max(100), exposureCapOverrideSchema)
+      .optional(),
   })
   .superRefine((data, ctx) => {
     if (data.strategyName === 'TARGET_ALLOCATION') {
@@ -102,9 +141,35 @@ export const publishableConfigSchema = z
  * only way to publish anything today, since nothing in src/ writes those User
  * columns yet.
  */
+/** Short free-text summary shown alongside a listing (#527). Same self-doxx
+ * screening as label: it is publisher-authored text shown to strangers. */
+export const strategyDescriptionSchema = z
+  .string()
+  .trim()
+  .max(
+    MAX_DESCRIPTION_LENGTH,
+    `description must be at most ${MAX_DESCRIPTION_LENGTH} characters`
+  )
+  .refine((v) => !STELLAR_ADDRESS_PATTERN.test(v), {
+    message:
+      'description must not contain a Stellar address — published strategies are anonymous',
+  })
+  .refine((v) => !LONG_HEX_PATTERN.test(v), {
+    message:
+      'description must not contain long hexadecimal strings — published strategies are anonymous',
+  })
+
+/** Tag slugs, checked against the curated MarketplaceTag vocabulary in
+ * src/strategy/service.ts — this layer only bounds shape/count. */
+export const strategyTagsSchema = z
+  .array(z.string().trim().min(1).max(40))
+  .max(MAX_TAGS, `at most ${MAX_TAGS} tags are allowed`)
+
 export const publishStrategySchema = z.object({
   label: strategyLabelSchema,
   strategyConfig: publishableConfigSchema.optional(),
+  description: strategyDescriptionSchema.optional(),
+  tags: strategyTagsSchema.optional(),
 })
 
 /**
@@ -127,6 +192,19 @@ export const marketplaceQuerySchema = z.object({
   // those are tuned for WhatsApp transaction lists, not a leaderboard page.
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
+  // Discovery filters (#527) — riskMax/protocols/type/q are additive; an
+  // empty match still returns unfiltered facet counts (see getMarketplace).
+  riskMax: z.coerce.number().int().min(0).max(100).optional(),
+  protocols: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',').filter(Boolean) : undefined)),
+  type: z.enum(PUBLISHABLE_STRATEGIES).optional(),
+  tags: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',').filter(Boolean) : undefined)),
+  q: z.string().trim().max(100).optional(),
 })
 
 /**
@@ -137,6 +215,57 @@ export const marketplaceQuerySchema = z.object({
 export const strategyIdParamSchema = z.object({
   id: z.string().uuid('Invalid strategy ID'),
 })
+
+/**
+ * POST /strategies/simulate (#344)
+ *
+ * Dry-run a hypothetical strategy config. `followStrategyId` is mutually
+ * exclusive with the inline `strategy`/`targetAllocations`/`riskCeiling`. The
+ * historical replay window is capped at SIMULATE_MAX_WINDOW_DAYS (180) to bound
+ * compute. TARGET_ALLOCATION weight-sum-to-100 is enforced in the service once
+ * the effective config is resolved (a follow may contribute allocations), so it
+ * is not duplicated here.
+ */
+export const strategySimulateSchema = z
+  .object({
+    strategy: z
+      .enum(['MAX_YIELD', 'TARGET_ALLOCATION', 'GOAL_TRACKING'])
+      .nullable()
+      .optional(),
+    targetAllocations: z
+      .record(z.string().min(1).max(100), z.number().finite().min(0).max(100))
+      .optional(),
+    riskCeiling: z.number().int().min(0).max(100).optional(),
+    followStrategyId: z
+      .string()
+      .uuid('Invalid strategy ID')
+      .nullable()
+      .optional(),
+    historyWindowDays: z
+      .number()
+      .int()
+      .min(1)
+      .max(180, 'historyWindowDays is capped at 180 days')
+      .default(90)
+      .optional(),
+    assumeInitialDeposit: z.boolean().optional(),
+  })
+  .superRefine((data, ctx) => {
+    const hasInline =
+      data.strategy != null ||
+      data.targetAllocations !== undefined ||
+      data.riskCeiling !== undefined
+    if (data.followStrategyId && hasInline) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['followStrategyId'],
+        message:
+          'followStrategyId is mutually exclusive with inline strategy config',
+      })
+    }
+  })
+
+export type StrategySimulateInput = z.infer<typeof strategySimulateSchema>
 
 export type PublishStrategyInput = z.infer<typeof publishStrategySchema>
 export type MarketplaceQuery = z.infer<typeof marketplaceQuerySchema>

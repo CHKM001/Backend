@@ -1,0 +1,51 @@
+# Treasury Sweep Policies & Signer Rotation
+
+## Policy model
+
+`TreasurySweepPolicy` governs one tier pair (e.g. HOT→WARM). Policies are
+versioned: a change never mutates an existing row — `createPolicyVersion`
+(`src/treasury/policy.ts`) deactivates the current active policy and inserts
+a new one in the same transaction, so every policy change is an auditable
+new version. Validated at write time: `fromTier !== toTier`,
+`sweepIntervalMinutes > 0`, `0 < minSweepAmount < maxHotBalance`,
+`requiresApprovalAbove <= maxHotBalance`.
+
+## Sweep cadence
+
+`src/jobs/treasurySweep.ts`'s `evaluateTreasuryBalances` reads each active
+`TreasuryAccount` and its tier pair's active policy, and plans a sweep when
+the on-chain balance exceeds `maxHotBalance` by more than `minSweepAmount`.
+`executeSweep` gates on `requiresApprovalAbove`: sweeps above the threshold
+open a `MultisigEnvelope` (the treasury's own multisig primitive,
+`src/stellar/multisig.ts`) instead of enqueueing immediately — an admin
+collects signatures before a follow-up submission enqueues the outbox op.
+Sweeps at or below the threshold enqueue a `TREASURY_SWEEP` outbox op
+directly via `src/outbox/service.ts`.
+
+## Emergency sweep
+
+`executeEmergencySweep` bypasses cadence but never the signing bar — it
+never reads `requiresApprovalAbove` and always submits at `CRITICAL`
+priority. Triggered by an admin (`POST /api/admin/treasury/emergency-sweep`,
+scope `treasury:write`) or the agent circuit breaker's manual-trip path.
+Writes a distinct `AdminAuditLog` row (`action:
+'treasury.emergency_sweep'`) separate from a normal sweep's audit trail.
+
+## Signer rotation runbook
+
+1. `POST /api/admin/treasury/signer-rotations` with `treasuryAccountId`,
+   `oldSignerKey`, `newSignerKey` — enters `DUAL_ACTIVE` immediately; both
+   keys are valid signers from this point.
+2. Any `MultisigEnvelope` opened before this point keeps validating against
+   the signer set active when it opened (`signerSetVersion`) — a rotation
+   never invalidates an in-flight envelope.
+3. `POST /api/admin/treasury/signer-rotations/:id/finalize` — only valid
+   from `DUAL_ACTIVE`; transitions to `FINALIZED`. New envelopes opened
+   after this point require the new key.
+
+## Concurrency
+
+Emergency and cadence sweeps on the same signer account never race: op
+submission is claimed and serialized per `signerPublicKey` by the existing
+outbox dispatcher (`src/outbox/signerLock.ts`), the same mechanism every
+other money-moving outbox op already relies on.

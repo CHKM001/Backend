@@ -68,20 +68,11 @@ jobs:
       - name: Prisma migrate deploy
         run: npx prisma migrate deploy
 
-      # Run TypeScript lint check
-      - name: Run lint
-        run: npm run lint
+      - name: Release tooling regression tests
+        run: node --test scripts/tests/release.test.cjs
 
-      - name: Run format check
-        run: npm run format:check
-
-      # Build the project
-      - name: Build project
-        run: npm run build
-
-      # Run tests
-      - name: Run tests
-        run: npm test
+      - name: Release preflight gate
+        run: npm run release:preflight
 
   # ── Security scanning ─────────────────────────────────────────────────────
   # Issue #114: npm audit for known vulnerabilities

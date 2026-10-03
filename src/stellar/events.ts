@@ -32,7 +32,8 @@ import {
   updateLastProcessedLedger,
   recordDbOperation,
 } from '../utils/metrics'
-import { dispatchWebhookEvent } from '../services/webhookDispatcher'
+import { publishUserEvent } from '../events/publisher'
+import { EVENT_TYPE_TOPIC } from '../events/types'
 import { checkAndActivateOnDeposit } from '../referral/service'
 import { reconcileOutboxOpByTxHash } from '../outbox/service'
 import {
@@ -230,7 +231,7 @@ async function handleDepositEvent(
   depositData: DepositEvent,
   event: ContractEvent,
   tx: any = db
-): Promise<void> {
+): Promise<string> {
   const user = (await timedDbOperation(() =>
     tx.user.findUnique({ where: { walletAddress: depositData.user } })
   )) as any
@@ -334,6 +335,10 @@ async function handleDepositEvent(
     transaction.confirmedAt ?? new Date(),
     tx
   )
+
+  // Returned so handleEvent can address the real-time stream to the right
+  // user without repeating the walletAddress lookup this function already did.
+  return user.id
 }
 
 /**
@@ -343,7 +348,7 @@ async function handleWithdrawEvent(
   withdrawData: WithdrawEvent,
   event: ContractEvent,
   tx: any = db
-): Promise<void> {
+): Promise<string> {
   const user = (await timedDbOperation(() =>
     tx.user.findUnique({ where: { walletAddress: withdrawData.user } })
   )) as any
@@ -424,8 +429,12 @@ async function handleWithdrawEvent(
     withdrawData.assetSymbol,
     withdrawData.amount,
     transaction.confirmedAt ?? new Date(),
-    tx
+    tx,
+    user.accountingMethod,
+    transaction.selectedLotIds
   )
+
+  return user.id
 }
 
 /**
@@ -500,22 +509,33 @@ export async function handleEvent(
         case 'deposit': {
           const depositData = parseDepositEvent(event)
           DepositEventSchema.parse(depositData)
-          await handleDepositEvent(depositData, event, tx)
-          dispatchWebhookEvent('deposit.received', {
-            txHash: event.txHash,
-            ...depositData,
-          }).catch(() => {})
+          const depositUserId = await handleDepositEvent(depositData, event, tx)
+          // #316: one call now feeds both the operator webhook and the
+          // depositor's live socket. Fire-and-forget, as before — a
+          // notification problem must never roll back a confirmed deposit.
+          publishUserEvent(
+            depositUserId,
+            EVENT_TYPE_TOPIC['deposit.received'],
+            'deposit.received',
+            { txHash: event.txHash, ...depositData }
+          ).catch(() => {})
           break
         }
 
         case 'withdraw': {
           const withdrawData = parseWithdrawEvent(event)
           WithdrawEventSchema.parse(withdrawData)
-          await handleWithdrawEvent(withdrawData, event, tx)
-          dispatchWebhookEvent('withdraw.completed', {
-            txHash: event.txHash,
-            ...withdrawData,
-          }).catch(() => {})
+          const withdrawUserId = await handleWithdrawEvent(
+            withdrawData,
+            event,
+            tx
+          )
+          publishUserEvent(
+            withdrawUserId,
+            EVENT_TYPE_TOPIC['withdraw.completed'],
+            'withdraw.completed',
+            { txHash: event.txHash, ...withdrawData }
+          ).catch(() => {})
           break
         }
 
@@ -523,10 +543,17 @@ export async function handleEvent(
           const rebalanceData = parseRebalanceEvent(event)
           RebalanceEventSchema.parse(rebalanceData)
           await handleRebalanceEvent(rebalanceData, event, tx)
-          dispatchWebhookEvent('agent.rebalanced', {
-            txHash: event.txHash,
-            ...rebalanceData,
-          }).catch(() => {})
+          // Contract-level rebalance events are protocol-wide, not user-scoped:
+          // there is no user to address a stream frame to, so this one stays on
+          // the operator webhook channel alone. The per-user view of a
+          // rebalance is emitted by the agent loop, which knows whose positions
+          // moved. Passing an empty user list keeps the single emit path.
+          publishUserEvent(
+            [],
+            EVENT_TYPE_TOPIC['agent.rebalanced'],
+            'agent.rebalanced',
+            { txHash: event.txHash, ...rebalanceData }
+          ).catch(() => {})
           break
         }
         default:

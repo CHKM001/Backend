@@ -383,41 +383,38 @@ steps as comments. The `Migration rollback check` workflow blocks merge otherwis
 
 ## 7. Incident Contacts
 
+Alert-by-alert steps, ack timers, and the postmortem workflow are in [INCIDENT_RESPONSE.md](./INCIDENT_RESPONSE.md). This section is the contact list those steps use.
+
 ### Escalation tiers
 
 | Tier | Role | Responsibility | Contact |
 |---|---|---|---|
-| T1 | On-call engineer | Triage, restart, DLQ retry, RPC rotation | PagerDuty / Opsgenie |
-| T2 | Backend lead | Code fix, data reconciliation, migration rollback | Slack @backend-lead |
-| T3 | Engineering manager | Stakeholder comms, post-mortem, priority decisions | Slack @eng-mgr |
-| T4 | Security officer | Key compromise, wallet recovery, audit | Slack @sec-officer |
+| T1 | On-call engineer | Ack, triage, restart, DLQ retry, RPC rotation, sponsor top-up | PagerDuty (`PAGERDUTY_ROUTING_KEY`) |
+| T2 | Backend lead | Code fix, data reconciliation, migration rollback | Slack `@backend-lead`. Page if they have not answered inside the severity window |
+| T3 | Engineering manager | Stakeholder updates, priority, SEV1 postmortem acceptance | Slack `@eng-mgr` |
+| T4 | Security officer | Key compromise, wallet recovery, audit | Slack `@sec-officer`. Page immediately for SEV1 security incidents, do not wait for T2 |
 
 ### Communication channels
 
 | Channel | Purpose |
 |---|---|
 | `#neurowealth-alerts` | Prometheus alert notifications |
-| `#neurowealth-incidents` | Incident coordination thread |
-| PagerDuty | T1 on-call escalation |
-| Email: `ops@neurowealth.io` | Backup contact for critical outages |
+| `#neurowealth-incidents` | Incident coordination thread. The acknowledging engineer is the lead until they hand off in the thread |
+| PagerDuty | T1 page, then T2 at 15 min (SEV1) or 1 hour (SEV2) if still unacked or unmitigated |
+| Email: `ops@neurowealth.io` | Backup when PagerDuty or Slack is unreachable |
 
 ### Incident severity definitions
 
 | Severity | Definition | Response time | Escalation |
 |---|---|---|---|
-| **SEV1** | Event processing halted, funds at risk, data loss | < 15 min | T1 → T2 → T3 |
-| **SEV2** | Lag > 100 ledgers, DLQ > 50, agent loop degraded | < 1 hour | T1 → T2 |
-| **SEV3** | Lag > 50 ledgers, DLQ > 20, elevated error rate | < 8 hours | T1 |
+| **SEV1** | Event processing halted, global agent breaker open, funds at risk, data loss, sponsor XLM exhausted while deposits fail | < 15 min | T1 → T2 at 15 min → T3 at 30 min. T4 immediately for key compromise |
+| **SEV2** | Lag > 100 ledgers, DLQ > 50, agent loop degraded, readiness failing | < 1 hour | T1 → T2 if not mitigated in 1 hour |
+| **SEV3** | Lag > 50 ledgers, DLQ > 20, elevated latency | < 8 hours | T1 |
 | **SEV4** | Minor anomalies, informational alerts | Next business day | None |
 
-### Post-incident checklist
+### After the incident
 
-- [ ] Root cause identified and documented
-- [ ] Fix deployed (or rollback executed)
-- [ ] DLQ resolved and lag cleared
-- [ ] Alert thresholds adjusted if needed
-- [ ] Post-mortem filed in `docs/post-mortems/`
-- [ ] Runbook updated with lessons learned
+SEV1 and SEV2 are not closed until the postmortem in [INCIDENT_RESPONSE.md](./INCIDENT_RESPONSE.md) is merged. That workflow covers the timeline, the root cause, and the action items. Update this runbook in the same follow-up when a step here was wrong or missing.
 
 ---
 
@@ -462,4 +459,105 @@ psql "$DATABASE_URL" -c "
   FROM processed_events
   ORDER BY ledger DESC LIMIT 10;
 "
+```
+
+## 8. Sponsor Account Top-Up
+
+Sponsored reserves move the XLM cost from user to sponsor accounts (`STELLAR_SPONSOR_KEYS`). Monitor `GET /api/v1/admin/reserves` (admin-scoped, audit-logged) for `outstandingXlm` and `perSponsor[].availableXlm`. Alert `SponsorLowXlm` fires when any sponsor `< 10 XLM` for 5m.
+
+**Top-up:**
+```bash
+# Check
+curl -H "Authorization: Bearer $ADMIN_API_TOKEN" http://localhost:3001/api/v1/admin/reserves | jq
+
+# Fund sponsor from treasury/ops hot wallet via Stellar Laboratory or
+stellar account fund --destination <sponsorPublicKey> --amount 100 --network public
+
+# Verify
+curl -s http://localhost:3001/metrics | grep sponsor_available_xlm
+psql "$DATABASE_URL" -c "SELECT \"sponsorAccount\", count(*), sum(\"xlmReserved\") FROM reserve_sponsorships WHERE status='ACTIVE' GROUP BY \"sponsorAccount\";"
+```
+
+No auto top-up — operational runbook only. Reconciliation job (`reserveReconciliation` hourly) flags drift where on-chain sponsor ≠ ledger.
+
+## 9. Agent Circuit Breaker (#345)
+
+The agent circuit breaker halts agent-initiated rebalancing when the market,
+a protocol, or a user's account shows risk. It never touches withdrawals.
+Scopes: `GLOBAL` (halt everything), `PROTOCOL` (halt a target protocol +
+batches leaving it), `USER` (halt that user's batches). Breakers are
+`CLOSED → OPEN → HALF_OPEN → CLOSED`; an `OPEN` breaker auto-probes after its
+cooldown and needs `BREAKER_DEPEG_SUSTAINED_CHECKS` clean evaluations before
+recovering to `HALF_OPEN`, then one clean probe to close.
+
+### Rules
+
+| Rule | Env | Default | Trips when |
+|---|---|---|---|
+| abnormal_loss | `BREAKER_LOSS_PCT`, `BREAKER_LOSS_WINDOW_HOURS` | 5% / 24h | mark-to-market drawdown over the window exceeds the pct |
+| depeg | `BREAKER_DEPEG_ENABLED` (=`false`) | off | reported stablecoin price deviates > `BREAKER_DEPEG_BPS` (150) from $1 |
+| oscillation | `BREAKER_MAX_FLIPS`, `BREAKER_FLIP_WINDOW_HOURS` | 3 / 24h | same batch rebalances ≥ N times in the window |
+| stale_data | `BREAKER_STALE_MINUTES`, `BREAKER_STALE_CONSECUTIVE_FAILURES` | 120m / 3 | APY table older than limit, never scanned, or ≥ N consecutive failures |
+
+`BREAKER_COOLDOWN_MS` (1h) is the base cooldown; a repeated HALF_OPEN trip
+doubles it up to `BREAKER_MAX_COOLDOWN_MS` (24h).
+
+### Known limitation — de-peg price feed
+
+The de-peg rule is a pure consumer of a stablecoin spot price. As of this
+change no live price feed exists in this codebase: the fee oracle
+(`src/stellar/feeOracle.ts`) publishes only fees, and `src/stellar/routing.ts`
+is a stub. `getStablecoinPrice()` (`src/agent/breakerService.ts`) is the single
+integration point and currently returns `null` (fails safe — the rule never
+trips); the rule is disabled by default. Wire the oracle there, keep the pure
+rule unchanged, flip `BREAKER_DEPEG_ENABLED=true`, and re-run the de-peg unit
+tests.
+
+### Inspector
+
+```bash
+# All breakers with current state
+curl -H "Authorization: Bearer $ADMIN_API_TOKEN" http://localhost:3001/api/v1/admin/agent/breakers | jq
+
+# Agent status (incl. cached global breaker summary)
+curl -H "X-Internal-Token: $INTERNAL_SERVICE_TOKEN" http://localhost:3001/api/v1/agent/status | jq
+```
+
+### Manual trip
+
+`POST /api/v1/admin/agent/breakers` — body `{"scope":"PROTOCOL","scopeKey":"blend","reason":"..."}`.
+`GLOBAL` needs no `scopeKey`; `USER`/`PROTOCOL` require it. `reason` is always
+required. Written to the admin audit log (`TRIP_AGENT_BREAKER`).
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/agent/breakers \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"scope":"PROTOCOL","scopeKey":"blend","reason":"incident-4821 protocol outage"}'
+```
+
+A manual trip can only be cleared manually (`rule=manual` breakers never
+auto-reset). Manual resets are audit-logged too:
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/agent/breakers/<id>/reset \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"reason":"incident-4821 resolved, APY table verified fresh"}'
+```
+
+A breaker skips its tick when evaluation itself fails: the agent alerts
+(critical, `agent-breaker:eval-failed`) and halts **all** rebalancing for that
+tick rather than trading blind.
+
+### Response
+
+1. **Global halt**: investigate the trip rule (`agent_breaker_trips_total{scope="GLOBAL"}`), check the `[Breaker]` logs for the `lastEvaluation` detail, fix root cause, then either wait for auto-recovery or reset manually.
+2. **Protocol halt**: verify the protocol's APY/status independently before resetting; `compareProtocols` already refuses it as a target while OPEN.
+3. **User halt**: confirm with the user before resetting.
+4. **Evaluation-failed halt**: the breaker could not decide — check DB connectivity and the logged error before the next tick.
+
+### Verify
+
+```bash
+curl -s http://localhost:3001/metrics | grep -E "agent_breaker_(state|trips_total)"
+psql "$DATABASE_URL" -c "SELECT scope, \"scopeKey\", state, \"trippedRule\" FROM agent_circuit_breakers ORDER BY \"updatedAt\" DESC;"
 ```

@@ -1,13 +1,19 @@
 import { Router, Request, Response } from 'express'
 import db from '../db'
 import { requireAuth, enforceUserAccess } from '../middleware/authenticate'
+import { requireScope } from '../middleware/apiKeyAuth'
 import { validate } from '../middleware/validate'
 import { sendNotFound } from '../utils/errors'
+import {
+  restoreAlertRule,
+  softDeleteAlertRule,
+} from '../services/alertRuleLifecycle'
 import {
   createAlertRuleSchema,
   updateAlertRuleSchema,
   alertIdParamSchema,
   alertUserParamSchema,
+  compositeAlertRuleSchema,
 } from '../validators/alert-validators'
 
 const router = Router()
@@ -38,9 +44,30 @@ const alertSelect = {
  */
 router.post(
   '/',
-  validate({ body: createAlertRuleSchema }),
+  requireAuth,
+  requireScope('alerts:manage'),
+  validate({ body: createAlertRuleSchema.or(compositeAlertRuleSchema) }),
   async (req: Request, res: Response) => {
     const userId = req.auth!.userId
+
+    if (req.body.root) {
+      const body = req.body
+      const rule = await (db as any).alertRule.create({
+        data: {
+          userId,
+          metric: 'PROTOCOL_APY',
+          protocolName: null,
+          comparator: 'LT',
+          threshold: 0,
+          deliveryChannel: body.deliveryChannel ?? 'WEBHOOK',
+          cooldownMinutes: body.cooldownMinutes ?? 60,
+          isActive: true,
+        },
+        select: alertSelect,
+      })
+      return res.status(201).json({ ...rule, conditionTree: body.root })
+    }
+
     const {
       metric,
       protocolName,
@@ -80,7 +107,7 @@ router.get(
     const userId = req.params.userId as string
 
     const rules = await (db as any).alertRule.findMany({
-      where: { userId },
+      where: { userId, deletedAt: null },
       select: alertSelect,
       orderBy: { createdAt: 'desc' },
     })
@@ -96,12 +123,14 @@ router.get(
  */
 router.patch(
   '/:id',
+  requireAuth,
+  requireScope('alerts:manage'),
   validate({ params: alertIdParamSchema, body: updateAlertRuleSchema }),
   async (req: Request, res: Response) => {
     const userId = req.auth!.userId
 
     const existing = await (db as any).alertRule.findFirst({
-      where: { id: req.params.id, userId },
+      where: { id: req.params.id, userId, deletedAt: null },
       select: { id: true, metric: true, protocolName: true },
     })
     if (!existing) return sendNotFound(res, 'Alert rule')
@@ -153,20 +182,40 @@ router.patch(
  */
 router.delete(
   '/:id',
+  requireAuth,
+  requireScope('alerts:manage'),
   validate({ params: alertIdParamSchema }),
   async (req: Request, res: Response) => {
     const userId = req.auth!.userId
 
-    const existing = await (db as any).alertRule.findFirst({
-      where: { id: req.params.id, userId },
-      select: { id: true },
-    })
-    if (!existing) return sendNotFound(res, 'Alert rule')
-
-    await (db as any).alertRule.delete({ where: { id: req.params.id } })
+    const deleted = await softDeleteAlertRule(userId, req.params.id)
+    if (!deleted) return sendNotFound(res, 'Alert rule')
 
     return res.status(204).send()
   }
 )
+
+router.post(
+  '/:id/restore',
+  requireAuth,
+  requireScope('alerts:manage'),
+  validate({ params: alertIdParamSchema }),
+  async (req: Request, res: Response) => {
+    const restored = await restoreAlertRule(req.auth!.userId, req.params.id)
+    if (!restored) return sendNotFound(res, 'Deleted alert rule')
+    return res.status(200).json({ restored: true, id: req.params.id })
+  }
+)
+
+import {
+  snoozeAlertRule,
+  acknowledgeAlert,
+  listAlertFires,
+} from '../controllers/alert-ack-controller'
+
+// Snooze, Ack, and Fire history endpoints (#366)
+router.post('/:id/snooze', snoozeAlertRule)
+router.post('/:id/ack', acknowledgeAlert)
+router.get('/:id/fires', listAlertFires)
 
 export default router

@@ -153,6 +153,16 @@ export async function markConfirmed(
   })
 }
 
+export async function recordSubmittedTxHash(
+  opId: string,
+  txHash: string
+): Promise<void> {
+  await db.outboxOp.updateMany({
+    where: { id: opId, status: 'SUBMITTED' as PrismaOutboxOpStatus },
+    data: { txHash },
+  })
+}
+
 /**
  * A submit attempt failed. If attempts remain, return the op to PENDING with
  * a full-jitter backoff `nextAttemptAt` so the dispatcher retries it later;
@@ -348,6 +358,7 @@ export async function returnStuckOpToPending(opId: string): Promise<void> {
     where: { id: opId, status: 'SUBMITTED' as PrismaOutboxOpStatus },
     data: {
       status: 'PENDING' as PrismaOutboxOpStatus,
+      txHash: null,
       nextAttemptAt: new Date(),
     },
   })
@@ -369,9 +380,7 @@ export async function findStuckSubmittedOps(
 
 /**
  * Mirror a definitive outcome back onto the linked Transaction row
- * (DEPOSIT/WITHDRAW/REBALANCE payloads carry `transactionId`; REFERRAL_REWARD
- * does not and is a no-op here — its caller updates its Transaction row
- * itself since it always awaits dispatchOne synchronously).
+ * (DEPOSIT/WITHDRAW/REBALANCE/REFERRAL_REWARD payloads carry `transactionId`).
  *
  * This is what closes the loop for a NON-blocking dispatch (an agent
  * rebalance via dispatchInBackground) and for the crash-recovery case where
@@ -392,6 +401,17 @@ export async function mirrorLinkedTransaction(
       status: outcome.status,
       confirmedAt: outcome.status === 'CONFIRMED' ? new Date() : null,
     },
+  })
+}
+
+export async function mirrorPendingTransaction(
+  payload: OutboxPayload,
+  txHash: string
+): Promise<void> {
+  if (!('transactionId' in payload)) return
+  await db.transaction.updateMany({
+    where: { id: payload.transactionId },
+    data: { txHash, status: 'PENDING' },
   })
 }
 
