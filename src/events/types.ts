@@ -50,6 +50,8 @@ export const SOCKET_ONLY_EVENT_TYPES = [
   'security.new_session',
   /** #472 — a session was revoked (logout, admin, or refresh-token reuse). */
   'security.session_revoked',
+  /** #515 — suspicious session anomaly detected (impossible location, device change, subnet jump). */
+  'security.session_anomaly',
   /** #548 — admin impersonation session started. */
   'account.impersonation_started',
   // #535 — guardian-based social recovery. Socket-only by design: a recovery is
@@ -123,6 +125,7 @@ export const EVENT_TYPE_TOPIC: Record<UserEventType, UserEventTopic> = {
   'security.recovery_cancelled': 'alerts',
   'security.recovery_completed': 'alerts',
   'security.guardian_approval_requested': 'alerts',
+  'security.session_anomaly': 'alerts',
   'account.impersonation_started': 'account',
 }
 
