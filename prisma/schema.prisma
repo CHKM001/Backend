@@ -330,7 +330,6 @@ model User {
   allocationSuggestions   AllocationSuggestion[]
   portfolioAttributions   PortfolioAttribution[]
   portfolioRiskAggregates PortfolioRiskAggregate[]
-<<<<<<< HEAD
   erasureRequests         ErasureRequest[]
   userApiKeys             UserApiKey[]
   pushDeviceTokens        PushDeviceToken[]
@@ -339,19 +338,10 @@ model User {
   linkedExternalWallets   LinkedExternalWallet[]
   approvalPolicies        ApprovalPolicy[]         @relation("ApprovalPolicyPrincipal")
   approvalRequests        ApprovalRequest[]        @relation("ApprovalRequestPrincipal")
-=======
-  erasureRequests              ErasureRequest[]
-  userApiKeys                  UserApiKey[]
-  pushDeviceTokens             PushDeviceToken[]
-  totpCredential               TotpCredential?
-  linkedExternalWallets        LinkedExternalWallet[]
-  approvalPolicies             ApprovalPolicy[]         @relation("ApprovalPolicyPrincipal")
-  approvalRequests             ApprovalRequest[]        @relation("ApprovalRequestPrincipal")
-  complianceCases              ComplianceCase[]
-  emailIdentity                EmailIdentity?
-  webhookEndpoints             UserWebhookEndpoint[]
-  notificationPreferences      NotificationPreference[]
->>>>>>> d4e590c (solve error--)
+  complianceCases         ComplianceCase[]
+  emailIdentity           EmailIdentity?
+  webhookEndpoints        UserWebhookEndpoint[]
+  notificationPreferences NotificationPreference[]
 
   @@map("users")
 }
@@ -1831,7 +1821,6 @@ model ErasureRequest {
   @@map("erasure_requests")
 }
 
-<<<<<<< HEAD
 // --- Issue #532: Borrow Against Deposited Collateral (non-liquidating credit line)
 //
 // A CollateralLoan lets a user borrow stablecoin against a position they have
@@ -2005,22 +1994,22 @@ model ProtectionFundContribution {
 }
 
 model CoverageEvent {
-  id          String   @id @default(uuid())
-  protocolName String
+  id                    String   @id @default(uuid())
+  protocolName          String
   // EXPLOIT | INSOLVENCY | GOVERNANCE_FAILURE (narrow, published definition)
-  cause       String
+  cause                 String
   // ISO-8601 date-time strings, UTC
-  lossWindowStart String
-  lossWindowEnd   String
-  totalPlatformExposure Decimal @db.Decimal(36, 18)
-  declaredBy  String
+  lossWindowStart       String
+  lossWindowEnd         String
+  totalPlatformExposure Decimal  @db.Decimal(36, 18)
+  declaredBy            String
   // PENDING_REVIEW | APPROVED | REJECTED
-  status      String   @default("PENDING_REVIEW")
-  reviewedBy  String?
-  coverageTerms Json? // snapshot of coverage rules at declaration time
-  description String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  status                String   @default("PENDING_REVIEW")
+  reviewedBy            String?
+  coverageTerms         Json? // snapshot of coverage rules at declaration time
+  description           String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   claims CoverageClaim[]
 
@@ -2030,32 +2019,33 @@ model CoverageEvent {
 }
 
 model CoverageClaim {
-  id          String   @id @default(uuid())
-  eventId     String
-  userId      String
-  positionId  String
+  id           String   @id @default(uuid())
+  eventId      String
+  userId       String
+  positionId   String
   // The user's loss in this position during the loss window
-  actualLoss  Decimal  @db.Decimal(36, 18)
+  actualLoss   Decimal  @db.Decimal(36, 18)
   // Net of any protocol-level recovery already received
-  netLoss     Decimal  @db.Decimal(36, 18)
+  netLoss      Decimal  @db.Decimal(36, 18)
   // The amount the fund will actually pay (capped + pro-rated)
-  payoutAmount Decimal @db.Decimal(36, 18)
+  payoutAmount Decimal  @db.Decimal(36, 18)
   // FULL | PRORATED | ZERO
   coverageType String
   // PENDING | PAID | REJECTED
-  status      String   @default("PENDING")
-  outboxOpId  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  status       String   @default("PENDING")
+  outboxOpId   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  event CoverageEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  event    CoverageEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  position Position      @relation(fields: [positionId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, positionId])
   @@index([userId, status])
   @@index([eventId, status])
   @@map("coverage_claims")
-=======
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // New enums added to support missing models
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2082,18 +2072,18 @@ enum CaseStatus {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model AgentCircuitBreaker {
-  id                   String    @id @default(uuid())
-  workflowKind         String    @unique
-  status               String    @default("CLOSED") // CLOSED | OPEN | HALF_OPEN
-  trippedAt            DateTime?
-  trippedReason        String?
-  resetAt              DateTime?
-  halfOpenSince        DateTime?
-  successesInHalfOpen  Int       @default(0)
-  failuresInHalfOpen   Int       @default(0)
-  failedAt             DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  id                  String    @id @default(uuid())
+  workflowKind        String    @unique
+  status              String    @default("CLOSED") // CLOSED | OPEN | HALF_OPEN
+  trippedAt           DateTime?
+  trippedReason       String?
+  resetAt             DateTime?
+  halfOpenSince       DateTime?
+  successesInHalfOpen Int       @default(0)
+  failuresInHalfOpen  Int       @default(0)
+  failedAt            DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   @@index([status])
   @@index([workflowKind])
@@ -2105,15 +2095,15 @@ model AgentCircuitBreaker {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model ComplianceCase {
-  id             String     @id @default(uuid())
-  userId         String
-  status         CaseStatus @default(OPEN)
-  priority       String     @default("HIGH")
-  openedReason   String
-  triggerScore   Float?
-  relatedTxnIds  String[]   @default([])
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id            String     @id @default(uuid())
+  userId        String
+  status        CaseStatus @default(OPEN)
+  priority      String     @default("HIGH")
+  openedReason  String
+  triggerScore  Float?
+  relatedTxnIds String[]   @default([])
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
   user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   events CaseEvent[]
@@ -2144,17 +2134,17 @@ model CaseEvent {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model TravelRuleRecord {
-  id             String   @id @default(uuid())
-  transactionId  String
-  direction      String   // INBOUND | OUTBOUND
-  amountBaseCcy  Decimal  @db.Decimal(36, 18)
-  baseCurrency   String
-  originator     Json
-  beneficiary    Json
-  dataSource     String
-  status         String   @default("PENDING")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(uuid())
+  transactionId String
+  direction     String // INBOUND | OUTBOUND
+  amountBaseCcy Decimal  @db.Decimal(36, 18)
+  baseCurrency  String
+  originator    Json
+  beneficiary   Json
+  dataSource    String
+  status        String   @default("PENDING")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([transactionId])
   @@index([status])
@@ -2189,13 +2179,13 @@ model EmailIdentity {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model AlertAck {
-  id        String     @id @default(uuid())
+  id        String   @id @default(uuid())
   ruleId    String
   userId    String
   fireId    String?
   source    String
   note      String?
-  createdAt DateTime   @default(now())
+  createdAt DateTime @default(now())
 
   fires AlertFire[]
 
@@ -2206,11 +2196,11 @@ model AlertAck {
 }
 
 model AlertFire {
-  id        String    @id @default(uuid())
+  id        String   @id @default(uuid())
   ruleId    String
   firedAt   DateTime
   ackId     String?
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   ack AlertAck? @relation(fields: [ackId], references: [id], onDelete: SetNull)
 
@@ -2233,7 +2223,7 @@ model UserWebhookEndpoint {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   deliveries UserWebhookDelivery[]
 
   @@index([userId])
@@ -2242,14 +2232,14 @@ model UserWebhookEndpoint {
 }
 
 model UserWebhookDelivery {
-  id           String    @id @default(uuid())
+  id           String   @id @default(uuid())
   endpointId   String
   eventId      String
   payload      Json
-  status       String    @default("PENDING")
+  status       String   @default("PENDING")
   responseCode Int?
   error        String?
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime @default(now())
 
   endpoint UserWebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
 
@@ -2335,20 +2325,20 @@ model TreasuryAccount {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model TreasurySweep {
-  id          String       @id @default(uuid())
-  fromTier    TreasuryTier
-  toTier      TreasuryTier
-  asset       String
-  amount      Decimal      @db.Decimal(36, 18)
-  status      String       @default("PENDING")
-  reason      String
-  outboxOpId  String?
-  accountId   String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id         String       @id @default(uuid())
+  fromTier   TreasuryTier
+  toTier     TreasuryTier
+  asset      String
+  amount     Decimal      @db.Decimal(36, 18)
+  status     String       @default("PENDING")
+  reason     String
+  outboxOpId String?
+  accountId  String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
 
-  account    TreasuryAccount?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  envelopes  MultisigEnvelope[]
+  account   TreasuryAccount?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  envelopes MultisigEnvelope[]
 
   @@index([status])
   @@index([fromTier, toTier])
@@ -2429,19 +2419,18 @@ model NotificationPreference {
 }
 
 model NotificationPreferenceAuditLog {
-  id             String   @id @default(uuid())
-  userId         String
-  action         String
-  channel        String
-  category       String
-  previousValue  Boolean
-  newValue       Boolean
-  changedBy      String
-  changedAt      DateTime @default(now())
-  metadata       Json?
+  id            String   @id @default(uuid())
+  userId        String
+  action        String
+  channel       String
+  category      String
+  previousValue Boolean
+  newValue      Boolean
+  changedBy     String
+  changedAt     DateTime @default(now())
+  metadata      Json?
 
   @@index([userId])
   @@index([changedAt])
   @@map("notification_preference_audit_logs")
->>>>>>> d4e590c (solve error--)
 }
