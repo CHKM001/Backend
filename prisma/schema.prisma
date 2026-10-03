@@ -330,6 +330,7 @@ model User {
   allocationSuggestions   AllocationSuggestion[]
   portfolioAttributions   PortfolioAttribution[]
   portfolioRiskAggregates PortfolioRiskAggregate[]
+<<<<<<< HEAD
   erasureRequests         ErasureRequest[]
   userApiKeys             UserApiKey[]
   pushDeviceTokens        PushDeviceToken[]
@@ -338,6 +339,19 @@ model User {
   linkedExternalWallets   LinkedExternalWallet[]
   approvalPolicies        ApprovalPolicy[]         @relation("ApprovalPolicyPrincipal")
   approvalRequests        ApprovalRequest[]        @relation("ApprovalRequestPrincipal")
+=======
+  erasureRequests              ErasureRequest[]
+  userApiKeys                  UserApiKey[]
+  pushDeviceTokens             PushDeviceToken[]
+  totpCredential               TotpCredential?
+  linkedExternalWallets        LinkedExternalWallet[]
+  approvalPolicies             ApprovalPolicy[]         @relation("ApprovalPolicyPrincipal")
+  approvalRequests             ApprovalRequest[]        @relation("ApprovalRequestPrincipal")
+  complianceCases              ComplianceCase[]
+  emailIdentity                EmailIdentity?
+  webhookEndpoints             UserWebhookEndpoint[]
+  notificationPreferences      NotificationPreference[]
+>>>>>>> d4e590c (solve error--)
 
   @@map("users")
 }
@@ -1409,6 +1423,9 @@ model ReferralConversion {
   reviewedBy           String?
   reviewedAt           DateTime?
   rejectionReason      String?
+  fraudReasons         String[]       @default([])
+  reviewDecision       String?
+  tier2RewardTxId      String?
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -1814,6 +1831,7 @@ model ErasureRequest {
   @@map("erasure_requests")
 }
 
+<<<<<<< HEAD
 // --- Issue #532: Borrow Against Deposited Collateral (non-liquidating credit line)
 //
 // A CollateralLoan lets a user borrow stablecoin against a position they have
@@ -2037,4 +2055,393 @@ model CoverageClaim {
   @@index([userId, status])
   @@index([eventId, status])
   @@map("coverage_claims")
+=======
+// ─────────────────────────────────────────────────────────────────────────────
+// New enums added to support missing models
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum TreasuryTier {
+  HOT
+  WARM
+  COLD
+}
+
+enum CaseStatus {
+  OPEN
+  TRIAGE
+  INVESTIGATING
+  ESCALATED
+  PENDING_SAR
+  SAR_FILED
+  CLEARED
+  CLOSED_NO_ACTION
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AgentCircuitBreaker — tracks per-workflow circuit-breaker state (#breakerService)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AgentCircuitBreaker {
+  id                   String    @id @default(uuid())
+  workflowKind         String    @unique
+  status               String    @default("CLOSED") // CLOSED | OPEN | HALF_OPEN
+  trippedAt            DateTime?
+  trippedReason        String?
+  resetAt              DateTime?
+  halfOpenSince        DateTime?
+  successesInHalfOpen  Int       @default(0)
+  failuresInHalfOpen   Int       @default(0)
+  failedAt             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([status])
+  @@index([workflowKind])
+  @@map("agent_circuit_breakers")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Compliance cases (#cases.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ComplianceCase {
+  id             String     @id @default(uuid())
+  userId         String
+  status         CaseStatus @default(OPEN)
+  priority       String     @default("HIGH")
+  openedReason   String
+  triggerScore   Float?
+  relatedTxnIds  String[]   @default([])
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events CaseEvent[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("compliance_cases")
+}
+
+model CaseEvent {
+  id        String   @id @default(uuid())
+  caseId    String
+  type      String   @default("EVIDENCE")
+  actor     String   @default("SYSTEM")
+  body      Json
+  createdAt DateTime @default(now())
+
+  case ComplianceCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([createdAt])
+  @@map("case_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Travel Rule (#travelRule.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model TravelRuleRecord {
+  id             String   @id @default(uuid())
+  transactionId  String
+  direction      String   // INBOUND | OUTBOUND
+  amountBaseCcy  Decimal  @db.Decimal(36, 18)
+  baseCurrency   String
+  originator     Json
+  beneficiary    Json
+  dataSource     String
+  status         String   @default("PENDING")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([transactionId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("travel_rule_records")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Email identity verification (#email-identity-controller)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model EmailIdentity {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  email          String
+  verified       Boolean   @default(false)
+  verifiedAt     DateTime?
+  token          String?
+  tokenExpiresAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email])
+  @@index([token])
+  @@map("email_identities")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alert acknowledgements and fires (#alert-ack-controller)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AlertAck {
+  id        String     @id @default(uuid())
+  ruleId    String
+  userId    String
+  fireId    String?
+  source    String
+  note      String?
+  createdAt DateTime   @default(now())
+
+  fires AlertFire[]
+
+  @@index([ruleId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("alert_acks")
+}
+
+model AlertFire {
+  id        String    @id @default(uuid())
+  ruleId    String
+  firedAt   DateTime
+  ackId     String?
+  createdAt DateTime  @default(now())
+
+  ack AlertAck? @relation(fields: [ackId], references: [id], onDelete: SetNull)
+
+  @@index([ruleId])
+  @@index([firedAt])
+  @@map("alert_fires")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// User-facing webhook endpoints and delivery log (#user-webhook-controller)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model UserWebhookEndpoint {
+  id        String   @id @default(uuid())
+  userId    String
+  url       String
+  secret    String
+  events    String[]
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries UserWebhookDelivery[]
+
+  @@index([userId])
+  @@index([isActive])
+  @@map("user_webhook_endpoints")
+}
+
+model UserWebhookDelivery {
+  id           String    @id @default(uuid())
+  endpointId   String
+  eventId      String
+  payload      Json
+  status       String    @default("PENDING")
+  responseCode Int?
+  error        String?
+  createdAt    DateTime  @default(now())
+
+  endpoint UserWebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId])
+  @@index([eventId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("user_webhook_deliveries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// User event store for SSE / event sourcing (#events/store.ts, #sse/handler.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model UserEvent {
+  id        String   @id @default(uuid())
+  userId    String
+  seq       BigInt
+  topic     String
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  @@index([userId, seq])
+  @@index([userId, topic])
+  @@index([createdAt])
+  @@map("user_events")
+}
+
+model UserEventSequence {
+  userId    String   @id
+  lastSeq   BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@map("user_event_sequences")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Treasury sweep policy (#treasury/policy.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model TreasurySweepPolicy {
+  id                    String       @id @default(uuid())
+  fromTier              TreasuryTier
+  toTier                TreasuryTier
+  maxHotBalance         Decimal      @db.Decimal(36, 18)
+  sweepIntervalMinutes  Int
+  minSweepAmount        Decimal      @db.Decimal(36, 18)
+  requiresApprovalAbove Decimal?     @db.Decimal(36, 18)
+  version               Int          @default(1)
+  isActive              Boolean      @default(true)
+  createdBy             String
+  createdAt             DateTime     @default(now())
+
+  @@index([fromTier, toTier])
+  @@index([isActive])
+  @@map("treasury_sweep_policies")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Treasury accounts (#jobs/treasurySweep.ts, #outbox/executors.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model TreasuryAccount {
+  id          String       @id @default(uuid())
+  publicKey   String
+  tier        TreasuryTier
+  isActive    Boolean      @default(true)
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  sweeps          TreasurySweep[]
+  signerRotations SignerRotation[]
+
+  @@index([tier])
+  @@index([isActive])
+  @@map("treasury_accounts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Treasury sweeps (#jobs/treasurySweep.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model TreasurySweep {
+  id          String       @id @default(uuid())
+  fromTier    TreasuryTier
+  toTier      TreasuryTier
+  asset       String
+  amount      Decimal      @db.Decimal(36, 18)
+  status      String       @default("PENDING")
+  reason      String
+  outboxOpId  String?
+  accountId   String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  account    TreasuryAccount?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  envelopes  MultisigEnvelope[]
+
+  @@index([status])
+  @@index([fromTier, toTier])
+  @@index([createdAt])
+  @@map("treasury_sweeps")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multisig envelopes for sweep authorisation (#jobs/treasurySweep.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MultisigEnvelope {
+  id         String    @id @default(uuid())
+  sweepId    String
+  publicKey  String
+  threshold  Int
+  signatures Json[]
+  status     String    @default("PENDING")
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  sweep TreasurySweep @relation(fields: [sweepId], references: [id], onDelete: Cascade)
+
+  @@index([sweepId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("multisig_envelopes")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Signer rotation with dual-active window (#treasury/signerRotation.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SignerRotation {
+  id                String    @id @default(uuid())
+  treasuryAccountId String
+  oldSignerKey      String
+  newSignerKey      String
+  status            String    @default("DUAL_ACTIVE") // DUAL_ACTIVE | FINALIZED
+  dualActiveSince   DateTime?
+  finalizedAt       DateTime?
+  initiatedBy       String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  treasuryAccount TreasuryAccount @relation(fields: [treasuryAccountId], references: [id], onDelete: Cascade)
+
+  @@index([treasuryAccountId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("signer_rotations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Notification preferences (#notifications/service.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model NotificationPreference {
+  id         String   @id @default(uuid())
+  userId     String
+  channel    String
+  category   String
+  enabled    Boolean  @default(true)
+  quietHours Json?
+  frequency  String?
+  updatedBy  String
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel, category])
+  @@index([userId])
+  @@index([channel])
+  @@index([category])
+  @@map("notification_preferences")
+}
+
+model NotificationPreferenceAuditLog {
+  id             String   @id @default(uuid())
+  userId         String
+  action         String
+  channel        String
+  category       String
+  previousValue  Boolean
+  newValue       Boolean
+  changedBy      String
+  changedAt      DateTime @default(now())
+  metadata       Json?
+
+  @@index([userId])
+  @@index([changedAt])
+  @@map("notification_preference_audit_logs")
+>>>>>>> d4e590c (solve error--)
 }

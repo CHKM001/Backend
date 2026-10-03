@@ -271,7 +271,7 @@ export async function executeErasure(
           tx.subAccount.count({ where: { parentUserId: userId } }),
           tx.subAccount.count({ where: { childUserId: userId } }),
           tx.publishedStrategy.count({ where: { userId } }),
-          tx.strategyFollow.count({ where: { userId } }),
+          tx.strategyFollow.count({ where: { followerUserId: userId } }),
           tx.costBasisLot.count({ where: { userId } }),
           tx.lotDisposal.count({ where: { userId } }),
           tx.portfolioAttribution.count({ where: { userId } }),
@@ -415,7 +415,7 @@ export async function executeErasure(
     await alertingService.emit({
       title: 'Privacy erasure failed',
       description: `Failed to delete user ${user.walletAddress} data: ${errorMessage}`,
-      severity: 'error',
+      severity: 'critical',
       component: 'privacy-erasure',
       dedupKey: `erasure-failed-${requestId}`,
     })
@@ -494,7 +494,7 @@ export async function previewErasure(
     db.subAccount.count({ where: { parentUserId: userId } }),
     db.subAccount.count({ where: { childUserId: userId } }),
     db.publishedStrategy.count({ where: { userId } }),
-    db.strategyFollow.count({ where: { userId } }),
+    db.strategyFollow.count({ where: { followerUserId: userId } }),
     db.costBasisLot.count({ where: { userId } }),
     db.lotDisposal.count({ where: { userId } }),
     db.portfolioAttribution.count({ where: { userId } }),
