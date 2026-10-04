@@ -1074,3 +1074,43 @@ export async function listConversionsForReview(): Promise<any[]> {
     orderBy: { createdAt: 'desc' },
   })
 }
+
+/**
+ * Alias of listConversionsForReview — exported under the name expected by
+ * the admin routes that were added alongside fraud-detection (#490).
+ */
+export const listFlaggedConversions = listConversionsForReview
+
+/**
+ * Referral leaderboard: top referrers by confirmed conversion count.
+ * Returns users sorted by number of accepted referrals, paginated.
+ */
+export async function referralLeaderboard(
+  page: number = 1,
+  limit: number = 20,
+  displayName?: string
+): Promise<{ ownerId: string; code: string; conversions: number }[]> {
+  const codes = await db.referralCode.findMany({
+    where: displayName
+      ? { owner: { displayName: { contains: displayName, mode: 'insensitive' } } }
+      : undefined,
+    include: {
+      _count: {
+        select: {
+          conversions: {
+            where: { status: 'ACTIVATED' },
+          },
+        },
+      },
+    },
+    orderBy: { conversions: { _count: 'desc' } },
+    skip: (page - 1) * limit,
+    take: limit,
+  })
+
+  return codes.map((c) => ({
+    ownerId: c.ownerUserId,
+    code: c.code,
+    conversions: c._count.conversions,
+  }))
+}

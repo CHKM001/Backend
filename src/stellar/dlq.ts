@@ -347,7 +347,7 @@ export class DeadLetterQueue {
   /**
    * Get DLQ status breakdown (pending, retried, resolved counts)
    */
-  private static async getStatusBreakdown(): Promise<{
+  static async getStatusBreakdown(): Promise<{
     pending: number
     retried: number
     resolved: number

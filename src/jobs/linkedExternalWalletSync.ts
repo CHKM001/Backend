@@ -20,9 +20,9 @@ export async function runLinkedExternalWalletSync(): Promise<void> {
       error
     )
     logger.error('[ExternalWalletSync] Batch failed', {
-      error: error instanceof Error ? error.message : String(error),
+      error: error instanceof Error ? error.message : String(error as object),
     })
-    throw error
+    throw error as Error
   }
 }
 
