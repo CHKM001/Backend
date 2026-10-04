@@ -82,6 +82,8 @@ export async function resolveSignerPublicKey(
       }
       return account.publicKey
     }
+    default:
+      throw new Error(`Unsupported outbox method: ${(payload as any).method}`)
   }
 }
 
@@ -225,6 +227,8 @@ export async function executeOutboxPayload(
     }
     case 'treasury_sweep':
       return submitTreasurySweepPayment(payload)
+    default:
+      throw new Error(`Unsupported outbox method: ${(payload as any).method}`)
   }
 }
 

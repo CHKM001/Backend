@@ -13,16 +13,16 @@ export async function runLinkedExternalWalletSync(): Promise<void> {
     const result = await syncLinkedExternalWallets()
     recordJobSuccess('linked_external_wallet_sync', Date.now() - startedAt)
     logger.info('[ExternalWalletSync] Batch completed', result)
-  } catch (error) {
+  } catch (error: any) {
     recordJobFailure(
       'linked_external_wallet_sync',
       Date.now() - startedAt,
       error
     )
     logger.error('[ExternalWalletSync] Batch failed', {
-      error: error instanceof Error ? error.message : String(error as object),
+      error: error?.message ?? String(error),
     })
-    throw error as Error
+    throw error
   }
 }
 

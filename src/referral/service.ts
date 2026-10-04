@@ -1088,13 +1088,17 @@ export const listFlaggedConversions = listConversionsForReview
 export async function referralLeaderboard(
   page: number = 1,
   limit: number = 20,
-  displayName?: string
-): Promise<{ ownerId: string; code: string; conversions: number }[]> {
+  includeDisplayName: boolean = false
+): Promise<{ ownerId: string; code: string; conversions: number; displayName?: string | null }[]> {
   const codes = await db.referralCode.findMany({
-    where: displayName
-      ? { owner: { displayName: { contains: displayName, mode: 'insensitive' } } }
-      : undefined,
     include: {
+      owner: includeDisplayName
+        ? {
+            select: {
+              displayName: true,
+            },
+          }
+        : false,
       _count: {
         select: {
           conversions: {
@@ -1112,5 +1116,7 @@ export async function referralLeaderboard(
     ownerId: c.ownerUserId,
     code: c.code,
     conversions: c._count.conversions,
+    ...(includeDisplayName ? { displayName: (c as any).owner?.displayName ?? null } : {}),
   }))
 }
+

@@ -28,7 +28,7 @@ export const auditLog = {
           action: entry.action,
           target: entry.userId,
           result: 'ok',
-          details: entry.metadata ?? {},
+          details: (entry.metadata as any) ?? {},
         },
       })
     } catch (err) {

@@ -308,6 +308,9 @@ model User {
   // reports, never rewrites past disposal rows (which carry no jurisdiction
   // of their own — see src/tax/jurisdictions/).
   taxJurisdiction     TaxJurisdiction  @default(US)
+  // #532 — User's preferred display currency for UI amounts. Defaults to USD
+  // and does NOT affect how amounts are stored (always in asset-native units).
+  displayCurrency     String           @default("USD")
 
   sessions                Session[]
   positions               Position[]
@@ -1416,6 +1419,9 @@ model ReferralConversion {
   fraudReasons         String[]       @default([])
   reviewDecision       String?
   tier2RewardTxId      String?
+  // Timestamp when the FLAGGED status was set — used to age-out stale reviews
+  // and to report on how long conversions sit in the fraud queue.
+  flaggedAt            DateTime?
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -2072,21 +2078,25 @@ enum CaseStatus {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model AgentCircuitBreaker {
-  id                  String    @id @default(uuid())
-  workflowKind        String    @unique
-  status              String    @default("CLOSED") // CLOSED | OPEN | HALF_OPEN
-  trippedAt           DateTime?
-  trippedReason       String?
-  resetAt             DateTime?
-  halfOpenSince       DateTime?
-  successesInHalfOpen Int       @default(0)
-  failuresInHalfOpen  Int       @default(0)
-  failedAt            DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  id          String    @id @default(uuid())
+  // GLOBAL rows use scopeKey=''; USER rows use scopeKey=userId;
+  // PROTOCOL rows use scopeKey=protocolName.
+  scope       String
+  scopeKey    String
+  // Circuit-breaker state: CLOSED (healthy) | OPEN (tripped) | HALF_OPEN (testing)
+  state       String    @default("CLOSED")
+  trippedRule String?
+  detail      String?
+  trippedAt   DateTime?
+  autoResetAt DateTime?
+  resetBy     String?
+  resetAt     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  @@index([status])
-  @@index([workflowKind])
+  @@unique([scope, scopeKey])
+  @@index([state])
+  @@index([scope])
   @@map("agent_circuit_breakers")
 }
 
@@ -2157,20 +2167,22 @@ model TravelRuleRecord {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model EmailIdentity {
-  id             String    @id @default(uuid())
-  userId         String    @unique
-  email          String
-  verified       Boolean   @default(false)
-  verifiedAt     DateTime?
-  token          String?
-  tokenExpiresAt DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  email           String
+  // PENDING | VERIFIED | BOUNCED | COMPLAINED
+  status          String    @default("PENDING")
+  verifiedAt      DateTime?
+  verifyTokenHash String?
+  verifyExpiresAt DateTime?
+  lastBounceAt    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([email])
-  @@index([token])
+  @@unique([email])
+  @@index([verifyTokenHash])
   @@map("email_identities")
 }
 
@@ -2214,35 +2226,53 @@ model AlertFire {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model UserWebhookEndpoint {
-  id        String   @id @default(uuid())
-  userId    String
-  url       String
-  secret    String
-  events    String[]
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  String    @id @default(uuid())
+  userId              String
+  url                 String
+  secret              String?
+  // HMAC-SHA256 of the raw secret, for fast validation without exposing the secret
+  secretHash          String
+  events              String[]
+  // Optional topic scope filter (array of topic strings)
+  topicScope          String[]  @default([])
+  // Optional JSON predicate filter applied to event payload
+  filterJson          Json?
+  // ACTIVE | PAUSED | DELETED
+  status              String    @default("ACTIVE")
+  isActive            Boolean   @default(true)
+  consecutiveFailures Int       @default(0)
+  lastDeliveryAt      DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   deliveries UserWebhookDelivery[]
 
   @@index([userId])
   @@index([isActive])
+  @@index([status])
   @@map("user_webhook_endpoints")
 }
 
 model UserWebhookDelivery {
-  id           String   @id @default(uuid())
-  endpointId   String
-  eventId      String
-  payload      Json
-  status       String   @default("PENDING")
-  responseCode Int?
-  error        String?
-  createdAt    DateTime @default(now())
+  id            String    @id @default(uuid())
+  endpointId    String
+  eventId       String?
+  // Sequence number from the UserEvent that triggered this delivery
+  userEventSeq  BigInt?
+  eventType     String?
+  payload       Json?
+  status        String    @default("PENDING")
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime?
+  responseCode  Int?
+  error         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   endpoint UserWebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
 
+  @@unique([endpointId, userEventSeq])
   @@index([endpointId])
   @@index([eventId])
   @@index([status])

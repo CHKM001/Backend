@@ -5,6 +5,7 @@
  * authentication. Credentials are stored in the `TotpCredential` model.
  */
 
+import { Network } from '@prisma/client'
 import db from '../db'
 import { logger } from '../utils/logger'
 import { randomBytes } from 'crypto'
@@ -17,15 +18,14 @@ export interface TotpChallenge {
   expiresAt: Date
   userId: string
   stellarPubKey: string
-  network: string
   referralCode?: string | null
 }
 
 export interface TotpChallengeResult {
   ok: true
-  user: { id: string; walletAddress: string; displayName: string | null; email: string | null; network: string }
+  user: { id: string; walletAddress: string; displayName: string | null; email: string | null; network: Network }
   stellarPubKey: string
-  network: string
+  network: Network
   referralCode?: string | null
 }
 
@@ -86,7 +86,7 @@ export function verifyTotpCode(secret: string, code: string): boolean {
 export async function getActiveTotpCredential(userId: string) {
   return db.totpCredential.findUnique({
     where: { userId },
-    select: { id: true, userId: true, verifiedAt: true, secret: true },
+    select: { id: true, userId: true, verifiedAt: true, secretEncrypted: true },
   })
 }
 
@@ -96,22 +96,24 @@ export async function getActiveTotpCredential(userId: string) {
  *
  * @returns challenge token string
  */
-export async function issueTotpChallenge(params: {
-  userId: string
-  stellarPubKey: string
-  network: string
-  referralCode?: string | null
-}): Promise<string> {
+export async function issueTotpChallenge(
+  userId: string,
+  meta: {
+    stellarPubKey: string
+    referralCode?: string | null
+    userAgent?: string | null
+    ipAddress?: string | null
+  }
+): Promise<{ token: string; expiresAt: Date }> {
   const token = randomBytes(32).toString('hex')
   const expiresAt = new Date(Date.now() + CHALLENGE_TTL_MS)
 
   pendingChallenges.set(token, {
     challengeToken: token,
     expiresAt,
-    userId: params.userId,
-    stellarPubKey: params.stellarPubKey,
-    network: params.network,
-    referralCode: params.referralCode ?? null,
+    userId,
+    stellarPubKey: meta.stellarPubKey,
+    referralCode: meta.referralCode ?? null,
   })
 
   // Evict expired challenges opportunistically on issue.
@@ -119,8 +121,8 @@ export async function issueTotpChallenge(params: {
     if (v.expiresAt < new Date()) pendingChallenges.delete(k)
   }
 
-  logger.debug('[TOTP] Challenge issued', { userId: params.userId })
-  return token
+  logger.debug('[TOTP] Challenge issued', { userId })
+  return { token, expiresAt }
 }
 
 /**
@@ -143,10 +145,10 @@ export async function completeTotpChallenge(
 
   const credential = await db.totpCredential.findUnique({
     where: { userId: challenge.userId },
-    select: { secret: true, verifiedAt: true },
+    select: { secretEncrypted: true, verifiedAt: true },
   })
 
-  if (!credential?.verifiedAt || !verifyTotpCode(credential.secret, code)) {
+  if (!credential?.verifiedAt || !verifyTotpCode(credential.secretEncrypted, code)) {
     return { ok: false, reason: 'invalid_code' }
   }
 
@@ -163,7 +165,18 @@ export async function completeTotpChallenge(
     ok: true,
     user,
     stellarPubKey: challenge.stellarPubKey,
-    network: challenge.network,
+    network: user.network,
     referralCode: challenge.referralCode,
   }
+}
+
+/**
+ * Convenience namespace export for consumers that import the service as a
+ * single object (`import { totpService } from './totp.service'`).
+ */
+export const totpService = {
+  getActiveTotpCredential,
+  issueTotpChallenge,
+  completeTotpChallenge,
+  verifyTotpCode,
 }
