@@ -16,12 +16,19 @@ echo ""
 # Step 1: Mark any failed migrations as rolled back
 echo "1️⃣ Checking for failed migrations..."
 
-# Check if the old webhook index migration failed (it was renamed)
-if npx prisma migrate status 2>&1 | grep -q "20260928180000_add_webhook_query_indexes"; then
-  echo "   Marking old webhook index migration as rolled back..."
-  npx prisma migrate resolve --rolled-back 20260928180000_add_webhook_query_indexes
-  echo "   ✅ Old migration marked as rolled back"
-fi
+# List of migrations that may have failed and been fixed
+FIXED_MIGRATIONS=(
+  "20260928180000_add_webhook_query_indexes"
+  "20260928200000_add_totp_credentials"
+  "20260929120000_add_collateral_loans"
+)
+
+for migration in "${FIXED_MIGRATIONS[@]}"; do
+  if npx prisma migrate status 2>&1 | grep -q "$migration.*failed\|$migration.*rolled"; then
+    echo "   Marking $migration as rolled back..."
+    npx prisma migrate resolve --rolled-back "$migration" || true
+  fi
+done
 
 echo "✅ Migration status checked"
 echo ""
