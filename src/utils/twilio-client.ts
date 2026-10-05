@@ -39,11 +39,11 @@ export interface SendMessageParams {
 export async function sendWhatsAppMessage(
   params: SendMessageParams
 ): Promise<string> {
-  return enqueueOutboundNotification('whatsapp', params)
+  return enqueueOutboundNotification('whatsapp', params as unknown as Record<string, unknown>)
 }
 
 export async function sendSmsMessage(params: SendMessageParams): Promise<string> {
-  return enqueueOutboundNotification('sms', params)
+  return enqueueOutboundNotification('sms', params as unknown as Record<string, unknown>)
 }
 
 export async function sendTwilioMessageNow(

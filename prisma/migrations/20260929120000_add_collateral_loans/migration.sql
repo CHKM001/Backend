@@ -35,10 +35,6 @@ ALTER TABLE "transactions" ADD COLUMN "loanSettlementAppliedAt" TIMESTAMP(3);
 CREATE INDEX "transactions_loanId_loanSettlementAppliedAt_idx"
 ON "transactions"("loanId", "loanSettlementAppliedAt");
 
-ALTER TABLE "transactions"
-ADD CONSTRAINT "transactions_loanId_fkey"
-FOREIGN KEY ("loanId") REFERENCES "collateral_loans"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
 -- ── collateral_loans ─────────────────────────────────────────────────────────
 CREATE TABLE "collateral_loans" (
     "id" TEXT NOT NULL,
@@ -92,6 +88,11 @@ FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASC
 ALTER TABLE "collateral_loans"
 ADD CONSTRAINT "collateral_loans_positionId_fkey"
 FOREIGN KEY ("positionId") REFERENCES "positions"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- Now add foreign key from transactions to collateral_loans (after table exists)
+ALTER TABLE "transactions"
+ADD CONSTRAINT "transactions_loanId_fkey"
+FOREIGN KEY ("loanId") REFERENCES "collateral_loans"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- ── loan_liquidation_events ──────────────────────────────────────────────────
 CREATE TABLE "loan_liquidation_events" (
