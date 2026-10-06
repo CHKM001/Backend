@@ -28,7 +28,7 @@ export async function startImpersonation(
 
     await publishUserEvent(
       targetUserId,
-      EVENT_TYPE_TOPIC['account.security'],
+      'account',
       'account.impersonation_started',
       {
         adminId,
