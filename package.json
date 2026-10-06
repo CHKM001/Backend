@@ -29,7 +29,8 @@
     "validate:spec": "npx --yes @redocly/cli@latest lint docs/openapi.yaml --format=stylish",
     "build:spec": "mkdir -p dist/docs && cp docs/openapi.yaml dist/docs/openapi.yaml",
     "prebuild": "npm run clean && npm run build:spec",
-    "prestart": "npm run build"
+    "prestart": "npm run build",
+    "release:preflight": "bash scripts/release-preflight.sh"
   },
   "keywords": [],
   "author": "",

@@ -14,6 +14,9 @@ const TRANSACTION_TYPE_TO_QBO_CATEGORY: Record<TransactionType, string> = {
   REFERRAL_REWARD: 'Other Income',
   INBOUND_TRANSFER: 'Transfer In',
   CLAIMABLE_BALANCE_CLAIM: 'Transfer In',
+  LOAN_DISBURSE: 'Transfer In',
+  LOAN_REPAYMENT: 'Transfer Out',
+  LOAN_LIQUIDATION: 'Transfer Out',
 }
 
 export interface QboTransaction {
