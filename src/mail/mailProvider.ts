@@ -8,6 +8,7 @@ export interface MailMessage {
   html: string
   text: string
   headers?: Record<string, string>
+  [key: string]: unknown
 }
 
 export interface MailSendResult {

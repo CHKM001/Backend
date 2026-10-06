@@ -201,12 +201,10 @@ async function deliverAlert(
     triggeredAt: new Date().toISOString(),
   }
 
-  const wantsWebhook =
-    rule.deliveryChannel === 'WEBHOOK' || rule.deliveryChannel === 'BOTH' || rule.deliveryChannel === 'ALL'
-  const wantsWhatsApp =
-    rule.deliveryChannel === 'WHATSAPP' || rule.deliveryChannel === 'BOTH' || rule.deliveryChannel === 'ALL'
-  const wantsPush =
-    rule.deliveryChannel === 'PUSH' || rule.deliveryChannel === 'ALL'
+  const ch = rule.deliveryChannel as string
+  const wantsWebhook = ch === 'WEBHOOK' || ch === 'BOTH' || ch === 'ALL'
+  const wantsWhatsApp = ch === 'WHATSAPP' || ch === 'BOTH' || ch === 'ALL'
+  const wantsPush = ch === 'PUSH' || ch === 'ALL'
 
   // #316: the alert always reaches the user's real-time stream — that is the
   // channel they did not have to configure. The webhook leg stays opt-in via

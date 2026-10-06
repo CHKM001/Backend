@@ -26,7 +26,7 @@ export async function getUserPreferences(
     where: { userId },
     orderBy: { channel: 'asc' },
   })
-  return preferences as NotificationPreference[]
+  return preferences as unknown as NotificationPreference[]
 }
 
 /**
@@ -136,7 +136,7 @@ export async function setPreference(
       updatedBy,
     })
 
-    return preference as NotificationPreference
+    return preference as unknown as NotificationPreference
   })
 }
 
